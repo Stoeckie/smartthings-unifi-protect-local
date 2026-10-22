@@ -38,6 +38,15 @@ Events arrive in real time over the Protect events WebSocket.
 
 Cameras are created automatically.
 
+## Settings page on the hub
+
+Can't open the device settings in the SmartThings app? The driver also serves a small settings page on your hub.
+
+1. Find its address in the logs: `smartthings edge:drivers:logcat --hub-address <hub-ip>`, look for `[unifi] settings page: http://<hub-ip>:<port>/`. While the driver is not configured this line repeats every minute.
+2. Open that address in a browser on your home network, enter the console IP address and API key, and save.
+
+Values are stored on your hub only. The page never shows the key, and IP address and key are always saved together. The port changes when the driver restarts. Settings in the SmartThings app take priority when filled in.
+
 ## Settings
 
 | Setting | Default | Notes |
@@ -59,7 +68,7 @@ smartthings edge:channels:enroll
 smartthings edge:drivers:package . --install
 ```
 
-If you cannot open the controller device in the app, `src/local_config.lua` offers a fallback for IP and key. Never commit or share a filled in copy.
+If you cannot open the controller device in the app, use the **settings page** on your hub instead (see below). `src/local_config.lua` is a last resort fallback; never commit or share a filled in copy.
 
 ## Not supported
 

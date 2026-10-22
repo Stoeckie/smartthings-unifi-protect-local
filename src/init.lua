@@ -10,6 +10,7 @@ local json = require "st.json"
 local log = require "log"
 
 local api = require "unifi_api"
+local config_server = require "config_server"
 local ok_cfg, local_config = pcall(require, "local_config")
 if not ok_cfg or type(local_config) ~= "table" then local_config = {} end
 local lustre = require "lustre"
@@ -44,15 +45,29 @@ local function is_child(device)
   return device.parent_assigned_child_key ~= nil
 end
 
+local function clean_host(h)
+  return (tostring(h or ""):gsub("%s", ""):gsub("^https?://", ""):gsub("/.*$", ""):gsub(":%d+$", ""))
+end
+
+local function clean_key(k)
+  k = tostring(k or ""):gsub("%s", "")
+  if k == "none" then k = "" end
+  return k
+end
+
 local function prefs(ctrl)
   local p = ctrl.preferences or {}
-  local host = p.host and tostring(p.host) or ""
-  if host:match("^%s*$") and local_config.host and local_config.host ~= "" then host = tostring(local_config.host) end
-  host = host:gsub("%s", ""):gsub("^https?://", ""):gsub("/.*$", ""):gsub(":%d+$", "")
-  local key = p.apiKey and tostring(p.apiKey) or ""
-  if (key:match("^%s*$") or key == "none") and local_config.api_key then key = tostring(local_config.api_key) end
-  if key == "none" then key = "" end
-  key = key:gsub("%s", "")
+  -- 1. app settings, 2. hub settings page, 3. local_config.lua (always as a pair)
+  local host, key = clean_host(p.host), clean_key(p.apiKey)
+  if key == "" then
+    local fkey = clean_key(ctrl:get_field("cfg_key"))
+    if fkey ~= "" then
+      host, key = clean_host(ctrl:get_field("cfg_host")), fkey
+    elseif clean_key(local_config.api_key) ~= "" then
+      key = clean_key(local_config.api_key)
+      if clean_host(local_config.host) ~= "" then host = clean_host(local_config.host) end
+    end
+  end
   return {
     host = host,
     key = key,
@@ -416,9 +431,11 @@ local function run(driver, ctrl, gen)
   while s.gen == gen do
     local p = prefs(ctrl)
     if p.host == "" or p.key == "" then
-      log.warn("[unifi] controller not configured: set Console IP address and API key in the settings")
+      log.warn("[unifi] controller not configured: set Console IP address and API key in the app settings, or open "
+        .. tostring(s.settings_url or "the settings page"))
       ctrl:offline()
-      return
+      socket.sleep(60)
+      goto continue
     end
 
     local info, err = api.get_info(p.host, p.key)
@@ -474,6 +491,7 @@ local function run(driver, ctrl, gen)
         socket.sleep(backoff)
       end
     end
+    ::continue::
   end
 end
 
@@ -507,10 +525,44 @@ local function child_init(driver, child)
   emit_stream(child)
 end
 
+local function hub_ip(driver)
+  local ok, ip = pcall(function() return driver.environment_info.hub_ipv4 end)
+  return (ok and ip) or "<hub-ip>"
+end
+
+local function start_settings_page(driver, ctrl)
+  local s = get_state(ctrl)
+  if s.settings_port then return end
+  local okc, port, err = pcall(config_server.start, {
+    get_status = function()
+      local p = prefs(ctrl)
+      local text
+      if p.key == "" then text = "not configured"
+      elseif s.ws then text = "connected to " .. p.host
+      else text = "not connected (check IP address and API key)" end
+      return { text = text, host = p.host }
+    end,
+    on_save = function(host, key)
+      log.info("[unifi] settings saved via settings page, connecting to " .. host)
+      ctrl:set_field("cfg_host", host, { persist = true })
+      ctrl:set_field("cfg_key", key, { persist = true })
+      start(driver, ctrl)
+    end,
+  })
+  if not okc or not port then
+    log.warn("[unifi] could not start settings page: " .. tostring(okc and err or port))
+    return
+  end
+  s.settings_port = port
+  s.settings_url = string.format("http://%s:%d/", hub_ip(driver), port)
+  log.info("[unifi] settings page: " .. s.settings_url)
+end
+
 local function device_init(driver, device)
   if is_child(device) then
     child_init(driver, device)
   else
+    start_settings_page(driver, device)
     start(driver, device)
   end
 end
@@ -574,6 +626,8 @@ local function handle_refresh(driver, device)
     local ctrl = device:get_parent_device()
     if ctrl then cosock.spawn(function() sync_cameras(driver, ctrl) end, "unifi refresh") end
   else
+    local s = get_state(device)
+    if s.settings_url then log.info("[unifi] settings page: " .. s.settings_url) end
     start(driver, device)
   end
 end
