@@ -9,7 +9,7 @@ components:
 preferences:
   - name: "host"
     title: "Console IP address"
-    description: "Local IP address of your UniFi console, for example 192.168.1.1"
+    description: "Local IP address of your UniFi console, for example 192.168.1.1 (or use the settings page, see README)"
     required: true
     preferenceType: string
     definition:
