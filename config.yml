@@ -1,5 +1,5 @@
 name: 'UniFi Protect Local'
-packageKey: 'unifi-protect-local'
+packageKey: 'stoeckie-unifi-protect-local'
 permissions:
   lan: {}
   discovery: {}
