@@ -1,0 +1,58 @@
+name: unifi-controller
+components:
+  - id: main
+    capabilities:
+      - id: refresh
+        version: 1
+    categories:
+      - name: Bridges
+preferences:
+  - name: "host"
+    title: "Console IP address"
+    description: "Local IP address of your UniFi console, for example 192.168.1.1"
+    required: true
+    preferenceType: string
+    definition:
+      stringType: text
+      default: "192.168.1.1"
+  - name: "apiKey"
+    title: "API key"
+    description: "Local API key from UniFi OS (Control Plane > Integrations)"
+    required: true
+    preferenceType: string
+    definition:
+      stringType: password
+      default: "none"
+  - name: "eventTimeout"
+    title: "Detection reset (seconds)"
+    description: "Safety reset if UniFi never sends an end of motion or detection"
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 10
+      maximum: 600
+      default: 60
+  - name: "enableVideo"
+    title: "Video stream (experimental)"
+    description: "Expose the camera RTSP stream to SmartThings. View it via a camera group. Often does not work."
+    required: false
+    preferenceType: boolean
+    definition:
+      default: false
+  - name: "videoQuality"
+    title: "Video quality"
+    required: false
+    preferenceType: enumeration
+    definition:
+      options:
+        high: "High"
+        medium: "Medium"
+        low: "Low"
+      default: medium
+  - name: "videoSecure"
+    title: "Use RTSPS (encrypted)"
+    description: "Off = plain RTSP on port 7447 (best chance to work in SmartThings)"
+    required: false
+    preferenceType: boolean
+    definition:
+      default: false

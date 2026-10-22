@@ -1,0 +1,6 @@
+UniFi Protect Local - SmartThings Edge driver
+Copyright 2026 Stoeckie
+
+This product includes the "lustre" WebSocket library as vendored in the
+SmartThings Sonos Edge driver (https://github.com/SmartThingsCommunity/SmartThingsEdgeDrivers),
+licensed under the Apache License, Version 2.0.

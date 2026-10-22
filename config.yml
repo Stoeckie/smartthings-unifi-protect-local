@@ -1,0 +1,7 @@
+name: 'UniFi Protect Local'
+packageKey: 'unifi-protect-local'
+permissions:
+  lan: {}
+  discovery: {}
+description: "Local UniFi Protect integration (API key): doorbell ring, motion, person, vehicle, animal, experimental video"
+vendorSupportInformation: "https://community.smartthings.com"

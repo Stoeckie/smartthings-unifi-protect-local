@@ -1,0 +1,30 @@
+name: unifi-doorbell
+components:
+  - id: main
+    capabilities:
+      - id: motionSensor
+        version: 1
+      - id: button
+        version: 1
+      - id: refresh
+        version: 1
+    categories:
+      - name: DoorBell
+  - id: person
+    capabilities:
+      - id: motionSensor
+        version: 1
+    categories:
+      - name: MotionSensor
+  - id: vehicle
+    capabilities:
+      - id: motionSensor
+        version: 1
+    categories:
+      - name: MotionSensor
+  - id: animal
+    capabilities:
+      - id: motionSensor
+        version: 1
+    categories:
+      - name: MotionSensor

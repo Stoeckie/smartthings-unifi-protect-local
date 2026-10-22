@@ -1,0 +1,538 @@
+-- UniFi Protect Local: SmartThings Edge driver
+-- Uses the official UniFi Protect Integration API with a local API key.
+-- Controller (LAN device) holds the settings; cameras are EDGE_CHILD devices.
+
+local Driver = require "st.driver"
+local capabilities = require "st.capabilities"
+local cosock = require "cosock"
+local socket = require "cosock.socket"
+local json = require "st.json"
+local log = require "log"
+
+local api = require "unifi_api"
+local ok_cfg, local_config = pcall(require, "local_config")
+if not ok_cfg or type(local_config) ~= "table" then local_config = {} end
+local lustre = require "lustre"
+local CloseCode = require "lustre.frame.close".CloseCode
+
+local WebSocket = lustre.WebSocket
+local LustreConfig = lustre.Config
+local Message = lustre.Message
+
+local SMART_COMPONENTS = { person = "person", vehicle = "vehicle", animal = "animal" }
+local RESYNC_INTERVAL = 600 -- seconds between camera list refreshes
+local WS_KEEPALIVE = 60     -- seconds between websocket pings
+
+-- Per-controller runtime state, keyed by controller device id
+local states = {}
+
+local function get_state(ctrl)
+  local s = states[ctrl.id]
+  if not s then
+    s = { gen = 0, ws = nil, events = {}, active = {}, cameras = {} }
+    states[ctrl.id] = s
+  end
+  return s
+end
+
+local function is_child(device)
+  return device.parent_assigned_child_key ~= nil
+end
+
+local function prefs(ctrl)
+  local p = ctrl.preferences or {}
+  local host = p.host and tostring(p.host) or ""
+  if host:match("^%s*$") and local_config.host and local_config.host ~= "" then host = tostring(local_config.host) end
+  host = host:gsub("%s", ""):gsub("^https?://", ""):gsub("/.*$", ""):gsub(":%d+$", "")
+  local key = p.apiKey and tostring(p.apiKey) or ""
+  if (key:match("^%s*$") or key == "none") and local_config.api_key then key = tostring(local_config.api_key) end
+  if key == "none" then key = "" end
+  key = key:gsub("%s", "")
+  return {
+    host = host,
+    key = key,
+    timeout = tonumber(p.eventTimeout) or 60,
+    video = p.enableVideo == true,
+    quality = p.videoQuality or "medium",
+    secure = p.videoSecure == true,
+  }
+end
+
+local function find_child(driver, ctrl, camera_id)
+  for _, d in ipairs(driver:get_devices()) do
+    if d.parent_device_id == ctrl.id and d.parent_assigned_child_key == camera_id then
+      return d
+    end
+  end
+end
+
+local function looks_like_doorbell(cam)
+  local name = string.lower(tostring(cam.name or ""))
+  if name:find("doorbell", 1, true) or name:find("deurbel", 1, true) then return true end
+  if cam.hasPackageCamera == true then return true end
+  -- doorbells carry an lcdMessage object; other cameras send null
+  local lcd = cam.lcdMessage
+  if type(lcd) == "table" and lcd ~= json.null then
+    local mt = getmetatable(lcd)
+    if not (mt and mt.__tojson) then return true end
+  end
+  return false
+end
+
+local function wanted_profile(is_doorbell, video)
+  return (is_doorbell and "unifi-doorbell" or "unifi-camera") .. (video and "-video" or "")
+end
+
+local function emit_stream(child)
+  local url = child:get_field("stream_url")
+  if url and child:supports_capability_by_id("videoStream") then
+    local ok, err = pcall(function()
+      child:emit_event(capabilities.videoStream.stream({ InHomeURL = url, OutHomeURL = url }))
+    end)
+    if not ok then log.warn("[unifi] could not emit stream: " .. tostring(err)) end
+  end
+end
+
+---------------------------------------------------------------------------
+-- Detection state handling
+---------------------------------------------------------------------------
+
+local function emit_motion(child, comp, active)
+  local component = child.profile.components[comp]
+  if not component then return end
+  local ev = active and capabilities.motionSensor.motion.active() or capabilities.motionSensor.motion.inactive()
+  child:emit_component_event(component, ev)
+end
+
+local function deactivate(driver, ctrl, cam_id, comp, ev_id)
+  local s = get_state(ctrl)
+  local per_cam = s.active[cam_id]
+  if not per_cam or not per_cam[comp] or not per_cam[comp][ev_id] then return end
+  per_cam[comp][ev_id] = nil
+  if next(per_cam[comp]) == nil then
+    local child = find_child(driver, ctrl, cam_id)
+    if child then emit_motion(child, comp, false) end
+  end
+end
+
+local function activate(driver, ctrl, cam_id, comp, ev_id)
+  local s = get_state(ctrl)
+  s.active[cam_id] = s.active[cam_id] or {}
+  local per_cam = s.active[cam_id]
+  per_cam[comp] = per_cam[comp] or {}
+  if per_cam[comp][ev_id] then return end
+  local was_empty = next(per_cam[comp]) == nil
+  per_cam[comp][ev_id] = true
+  if was_empty then
+    local child = find_child(driver, ctrl, cam_id)
+    if child then emit_motion(child, comp, true) end
+  end
+  -- safety reset in case the end of the event never arrives
+  local timeout = prefs(ctrl).timeout
+  driver:call_with_delay(timeout, function()
+    deactivate(driver, ctrl, cam_id, comp, ev_id)
+  end, "unifi detection timeout")
+end
+
+local function components_for(ev)
+  local comps = {}
+  if ev.type == "motion" then
+    table.insert(comps, "main")
+  elseif ev.type == "smartDetectZone" or ev.type == "smartDetectLine" then
+    for t in pairs(ev.smart) do
+      if SMART_COMPONENTS[t] then table.insert(comps, SMART_COMPONENTS[t]) end
+    end
+  end
+  return comps
+end
+
+local function handle_ring(driver, ctrl, cam_id)
+  local child = find_child(driver, ctrl, cam_id)
+  if not child then
+    log.warn("[unifi] ring for unknown camera " .. tostring(cam_id))
+    return
+  end
+  log.info("[unifi] doorbell ring: " .. child.label)
+  if child:supports_capability_by_id("button") then
+    child:emit_event(capabilities.button.button.pushed({ state_change = true }))
+  else
+    -- camera turned out to be a doorbell: switch profile, then deliver the push
+    child:set_field("is_doorbell", true, { persist = true })
+    child:try_update_metadata({ profile = wanted_profile(true, prefs(ctrl).video) })
+    driver:call_with_delay(3, function()
+      local c = find_child(driver, ctrl, cam_id)
+      if c and c:supports_capability_by_id("button") then
+        c:emit_event(capabilities.button.button.pushed({ state_change = true }))
+      end
+    end, "unifi delayed ring")
+  end
+end
+
+local function handle_event_message(driver, ctrl, data)
+  local item = data.item
+  if type(item) ~= "table" or item.modelKey ~= "event" or not item.id then return end
+  local s = get_state(ctrl)
+  local action = data.type
+  local ev = s.events[item.id]
+
+  if action == "add" then
+    ev = { type = item.type, device = item.device, smart = {}, ts = os.time() }
+    if type(item.smartDetectTypes) == "table" then
+      for _, t in ipairs(item.smartDetectTypes) do ev.smart[t] = true end
+    end
+    s.events[item.id] = ev
+    log.debug(string.format("[unifi] event add %s on %s", tostring(ev.type), tostring(ev.device)))
+
+    if ev.type == "ring" then
+      handle_ring(driver, ctrl, ev.device)
+      return
+    end
+    for _, comp in ipairs(components_for(ev)) do
+      activate(driver, ctrl, ev.device, comp, item.id)
+    end
+    if item["end"] ~= nil and type(item["end"]) == "number" then
+      -- already finished: keep it active briefly so routines can see it
+      local id = item.id
+      driver:call_with_delay(5, function()
+        for _, comp in ipairs(components_for(ev)) do deactivate(driver, ctrl, ev.device, comp, id) end
+      end, "unifi short event")
+    end
+
+  elseif action == "update" then
+    if not ev then return end
+    if type(item.smartDetectTypes) == "table" then
+      for _, t in ipairs(item.smartDetectTypes) do
+        if not ev.smart[t] then
+          ev.smart[t] = true
+          if SMART_COMPONENTS[t] and (ev.type == "smartDetectZone" or ev.type == "smartDetectLine") then
+            activate(driver, ctrl, ev.device, SMART_COMPONENTS[t], item.id)
+          end
+        end
+      end
+    end
+    if item["end"] ~= nil and type(item["end"]) == "number" then
+      for _, comp in ipairs(components_for(ev)) do
+        deactivate(driver, ctrl, ev.device, comp, item.id)
+      end
+    end
+
+  elseif action == "remove" then
+    if ev then
+      for _, comp in ipairs(components_for(ev)) do
+        deactivate(driver, ctrl, ev.device, comp, item.id)
+      end
+      s.events[item.id] = nil
+    end
+  end
+end
+
+local function prune_events(ctrl)
+  local s = get_state(ctrl)
+  local cutoff = os.time() - 3600
+  for id, ev in pairs(s.events) do
+    if ev.ts < cutoff then s.events[id] = nil end
+  end
+end
+
+---------------------------------------------------------------------------
+-- Camera sync
+---------------------------------------------------------------------------
+
+local function sync_cameras(driver, ctrl)
+  local p = prefs(ctrl)
+  local s = get_state(ctrl)
+  s.last_sync = os.time()
+  local cams, err = api.get_cameras(p.host, p.key)
+  if not cams then
+    log.warn("[unifi] could not get cameras: " .. tostring(err))
+    return false
+  end
+  for _, cam in ipairs(cams) do
+    if type(cam) == "table" and cam.id then
+      s.cameras[cam.id] = cam
+      local child = find_child(driver, ctrl, cam.id)
+      s.pending = s.pending or {}
+      if not child and (s.pending[cam.id] or 0) > os.time() - 60 then
+        log.debug("[unifi] creation pending for " .. tostring(cam.name))
+      elseif not child then
+        s.pending[cam.id] = os.time()
+        local doorbell = looks_like_doorbell(cam)
+        log.info(string.format("[unifi] creating device for %s (doorbell=%s)", tostring(cam.name), tostring(doorbell)))
+        driver:try_create_device({
+          type = "EDGE_CHILD",
+          label = cam.name or ("UniFi camera " .. cam.id),
+          profile = wanted_profile(doorbell, p.video),
+          manufacturer = "Ubiquiti",
+          model = "UniFi Protect camera",
+          vendor_provided_label = cam.name or "UniFi camera",
+          parent_device_id = ctrl.id,
+          parent_assigned_child_key = cam.id,
+        })
+      else
+        local doorbell = child:get_field("is_doorbell")
+        if doorbell == nil then
+          doorbell = looks_like_doorbell(cam)
+          child:set_field("is_doorbell", doorbell, { persist = true })
+        end
+        local has_button = child:supports_capability_by_id("button")
+        local has_video = child:supports_capability_by_id("videoStream")
+        if has_button ~= doorbell or has_video ~= p.video then
+          log.info("[unifi] updating profile of " .. child.label)
+          child:try_update_metadata({ profile = wanted_profile(doorbell, p.video) })
+        end
+        if cam.state == "CONNECTED" then child:online() else child:offline() end
+
+        if p.video then
+          local url, serr = api.get_stream_url(p.host, p.key, cam.id, p.quality)
+          if url then
+            url = api.stream_url_variant(url, p.secure, p.host)
+            child:set_field("stream_url", url, { persist = true })
+            emit_stream(child)
+          else
+            log.warn("[unifi] no stream for " .. child.label .. ": " .. tostring(serr))
+          end
+        end
+      end
+    end
+  end
+  return true
+end
+
+---------------------------------------------------------------------------
+-- Connection loop
+---------------------------------------------------------------------------
+
+local function open_events_ws(host, key)
+  local sock, err = api.tls_connect(host, 443, 10)
+  if not sock then return nil, err end
+  local config = LustreConfig.default():keep_alive(WS_KEEPALIVE):header("X-API-KEY", key)
+  local ws = WebSocket.client(sock, api.EVENTS_WS, config)
+  local ok, herr = ws:client_handshake_and_start(host, 443)
+  if not ok then
+    sock:close()
+    return nil, "websocket: " .. tostring(herr)
+  end
+  return ws
+end
+
+local function close_ws(s)
+  if s.ws then
+    local ws = s.ws
+    s.ws = nil
+    pcall(function() ws:close(CloseCode.normal(), "reconnect") end)
+  end
+end
+
+local function set_children_offline(driver, ctrl)
+  for _, d in ipairs(driver:get_devices()) do
+    if d.parent_device_id == ctrl.id then d:offline() end
+  end
+end
+
+local function run(driver, ctrl, gen)
+  local s = get_state(ctrl)
+  local backoff = 5
+  while s.gen == gen do
+    local p = prefs(ctrl)
+    if p.host == "" or p.key == "" then
+      log.warn("[unifi] controller not configured: set Console IP address and API key in the settings")
+      ctrl:offline()
+      return
+    end
+
+    local info, err = api.get_info(p.host, p.key)
+    local ws
+    if info then
+      log.info("[unifi] connected to UniFi Protect " .. tostring(info.applicationVersion or ""))
+      sync_cameras(driver, ctrl)
+      ws, err = open_events_ws(p.host, p.key)
+    end
+
+    if not ws then
+      log.error("[unifi] connection failed: " .. tostring(err))
+      ctrl:offline()
+      set_children_offline(driver, ctrl)
+      socket.sleep(backoff)
+      backoff = math.min(backoff * 2, 300)
+    else
+      s.ws = ws
+      ctrl:online()
+      backoff = 5
+      log.info("[unifi] event stream open")
+      while s.gen == gen do
+        local ready, _, serr = socket.select({ ws }, nil, 60)
+        if ready and ready[1] then
+          local msg, rerr = ws:receive()
+          if rerr then
+            log.warn("[unifi] event stream closed: " .. tostring(rerr))
+            break
+          end
+          if msg and msg.type == Message.TEXT then
+            local ok, data = pcall(json.decode, msg.data)
+            if ok and type(data) == "table" then
+              local hok, herr = pcall(handle_event_message, driver, ctrl, data)
+              if not hok then log.error("[unifi] event handling error: " .. tostring(herr)) end
+            end
+          end
+        elseif serr and serr ~= "timeout" then
+          log.warn("[unifi] select error: " .. tostring(serr))
+          break
+        end
+        if ws.state ~= "Active" then
+          log.warn("[unifi] event stream no longer active (" .. tostring(ws.state) .. ")")
+          break
+        end
+        if os.time() - (s.last_sync or 0) > RESYNC_INTERVAL then
+          prune_events(ctrl)
+          sync_cameras(driver, ctrl)
+        end
+      end
+      if s.ws == ws then close_ws(s) end
+      if s.gen == gen then
+        ctrl:offline()
+        socket.sleep(backoff)
+      end
+    end
+  end
+end
+
+local function start(driver, ctrl)
+  local s = get_state(ctrl)
+  s.gen = s.gen + 1
+  local gen = s.gen
+  close_ws(s)
+  cosock.spawn(function()
+    local ok, err = pcall(run, driver, ctrl, gen)
+    if not ok then log.error("[unifi] connection task crashed: " .. tostring(err)) end
+  end, "unifi-protect " .. ctrl.id)
+end
+
+---------------------------------------------------------------------------
+-- Lifecycle and capability handlers
+---------------------------------------------------------------------------
+
+local function child_init(driver, child)
+  child:emit_event(capabilities.motionSensor.motion.inactive())
+  for comp in pairs(child.profile.components) do
+    if comp ~= "main" then emit_motion(child, comp, false) end
+  end
+  if child:supports_capability_by_id("button") then
+    child:emit_event(capabilities.button.supportedButtonValues({ "pushed" }, { visibility = { displayed = false } }))
+    child:emit_event(capabilities.button.numberOfButtons({ value = 1 }, { visibility = { displayed = false } }))
+  end
+  emit_stream(child)
+end
+
+local function device_init(driver, device)
+  if is_child(device) then
+    child_init(driver, device)
+  else
+    start(driver, device)
+  end
+end
+
+local function device_added(driver, device)
+  if is_child(device) then
+    child_init(driver, device)
+    local ctrl = device:get_parent_device()
+    if ctrl then
+      -- pick up doorbell detection and video for the new device
+      cosock.spawn(function() sync_cameras(driver, ctrl) end, "unifi sync")
+    end
+  end
+end
+
+local function info_changed(driver, device, event, args)
+  if is_child(device) then
+    -- profile changed (e.g. became doorbell or video toggled)
+    child_init(driver, device)
+    return
+  end
+  local old = (args and args.old_st_store and args.old_st_store.preferences) or {}
+  local new = device.preferences or {}
+  if old.host ~= new.host or old.apiKey ~= new.apiKey then
+    log.info("[unifi] connection settings changed, reconnecting")
+    start(driver, device)
+  elseif old.enableVideo ~= new.enableVideo or old.videoQuality ~= new.videoQuality
+      or old.videoSecure ~= new.videoSecure then
+    cosock.spawn(function() sync_cameras(driver, device) end, "unifi video sync")
+  end
+end
+
+local discovery_done = false
+
+local function device_removed(driver, device)
+  if not is_child(device) then
+    discovery_done = false
+    local s = get_state(device)
+    s.gen = s.gen + 1
+    close_ws(s)
+    states[device.id] = nil
+  end
+end
+
+local function handle_refresh(driver, device)
+  if is_child(device) then
+    local ctrl = device:get_parent_device()
+    if ctrl then cosock.spawn(function() sync_cameras(driver, ctrl) end, "unifi refresh") end
+  else
+    start(driver, device)
+  end
+end
+
+local function handle_start_stream(driver, device)
+  emit_stream(device)
+end
+
+local function handle_stop_stream(driver, device)
+  -- nothing to stop: the stream lives on the UniFi console
+end
+
+local function discovery(driver, _, should_continue)
+  for _, d in ipairs(driver:get_devices()) do
+    if not is_child(d) then
+      log.info("[unifi] controller already exists")
+      return
+    end
+  end
+  if discovery_done then return end
+  discovery_done = true
+  log.info("[unifi] creating UniFi Protect controller")
+  driver:try_create_device({
+    type = "LAN",
+    device_network_id = "unifi-protect-local-" .. tostring(os.time()),
+    label = "UniFi Protect",
+    profile = "unifi-controller",
+    manufacturer = "Ubiquiti",
+    model = "UniFi Protect controller",
+    vendor_provided_label = "UniFi Protect",
+  })
+end
+
+local capability_handlers = {
+  [capabilities.refresh.ID] = {
+    [capabilities.refresh.commands.refresh.NAME] = handle_refresh,
+  },
+}
+-- videoStream is optional: never let a missing definition stop the driver
+local vs_ok, vs_err = pcall(function()
+  capability_handlers[capabilities.videoStream.ID] = {
+    [capabilities.videoStream.commands.startStream.NAME] = handle_start_stream,
+    [capabilities.videoStream.commands.stopStream.NAME] = handle_stop_stream,
+  }
+end)
+if not vs_ok then log.warn("[unifi] videoStream capability unavailable: " .. tostring(vs_err)) end
+
+local driver = Driver("unifi-protect-local", {
+  discovery = discovery,
+  lifecycle_handlers = {
+    init = device_init,
+    added = device_added,
+    infoChanged = info_changed,
+    removed = device_removed,
+  },
+  capability_handlers = capability_handlers,
+})
+
+log.info("[unifi] UniFi Protect Local driver starting")
+driver:run()

@@ -1,0 +1,30 @@
+name: unifi-camera-video
+components:
+  - id: main
+    capabilities:
+      - id: motionSensor
+        version: 1
+      - id: videoStream
+        version: 1
+      - id: refresh
+        version: 1
+    categories:
+      - name: Camera
+  - id: person
+    capabilities:
+      - id: motionSensor
+        version: 1
+    categories:
+      - name: MotionSensor
+  - id: vehicle
+    capabilities:
+      - id: motionSensor
+        version: 1
+    categories:
+      - name: MotionSensor
+  - id: animal
+    capabilities:
+      - id: motionSensor
+        version: 1
+    categories:
+      - name: MotionSensor
