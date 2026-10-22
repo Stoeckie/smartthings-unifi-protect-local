@@ -1,4 +1,4 @@
-name: unifi-camera-audio
+name: upl-camera-audio
 components:
   - id: main
     capabilities:

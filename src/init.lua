@@ -85,8 +85,11 @@ local function looks_like_doorbell(cam)
   return false
 end
 
+-- Profiles of v1 (unifi-*) are kept unchanged for existing devices: the hub
+-- refuses a driver update that changes a profile in use. New profiles use the
+-- upl- prefix and existing devices are migrated to them.
 local function wanted_profile(is_doorbell, audio, video)
-  return (is_doorbell and "unifi-doorbell" or "unifi-camera")
+  return (is_doorbell and "upl-doorbell" or "upl-camera")
     .. (audio and "-audio" or "") .. (video and "-video" or "")
 end
 

@@ -1,12 +1,10 @@
-name: unifi-doorbell-audio-video
+name: upl-doorbell
 components:
   - id: main
     capabilities:
       - id: motionSensor
         version: 1
       - id: button
-        version: 1
-      - id: videoStream
         version: 1
       - id: refresh
         version: 1
@@ -30,24 +28,6 @@ components:
         version: 1
     categories:
       - name: MotionSensor
-  - id: sound
-    capabilities:
-      - id: soundSensor
-        version: 1
-    categories:
-      - name: SoundSensor
-  - id: smoke
-    capabilities:
-      - id: smokeDetector
-        version: 1
-    categories:
-      - name: SmokeDetector
-  - id: co
-    capabilities:
-      - id: carbonMonoxideDetector
-        version: 1
-    categories:
-      - name: GenericSensor
   - id: led
     capabilities:
       - id: switch

@@ -1,0 +1,56 @@
+name: upl-doorbell-audio-video
+components:
+  - id: main
+    capabilities:
+      - id: motionSensor
+        version: 1
+      - id: button
+        version: 1
+      - id: videoStream
+        version: 1
+      - id: refresh
+        version: 1
+    categories:
+      - name: DoorBell
+  - id: person
+    capabilities:
+      - id: motionSensor
+        version: 1
+    categories:
+      - name: MotionSensor
+  - id: vehicle
+    capabilities:
+      - id: motionSensor
+        version: 1
+    categories:
+      - name: MotionSensor
+  - id: animal
+    capabilities:
+      - id: motionSensor
+        version: 1
+    categories:
+      - name: MotionSensor
+  - id: sound
+    capabilities:
+      - id: soundSensor
+        version: 1
+    categories:
+      - name: SoundSensor
+  - id: smoke
+    capabilities:
+      - id: smokeDetector
+        version: 1
+    categories:
+      - name: SmokeDetector
+  - id: co
+    capabilities:
+      - id: carbonMonoxideDetector
+        version: 1
+    categories:
+      - name: GenericSensor
+  - id: led
+    capabilities:
+      - id: switch
+        version: 1
+    categories:
+      - name: Switch

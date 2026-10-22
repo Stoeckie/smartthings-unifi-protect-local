@@ -65,6 +65,10 @@ If you cannot open the controller device in the app, `src/local_config.lua` offe
 
 The Integration API has no endpoints for privacy mode (recording off) or NVR health metrics, so those are not included.
 
+## Developer note
+
+The hub refuses a driver update that changes the components of a profile already used by a device. Never edit existing profiles: add new ones (current set: `upl-*`) and migrate devices with `try_update_metadata`. The original `unifi-*` profiles are kept unchanged for that reason.
+
 ## Logs
 
 `smartthings edge:drivers:logcat`, lines start with `[unifi]`.
