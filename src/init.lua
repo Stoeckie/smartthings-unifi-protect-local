@@ -20,6 +20,11 @@ local LustreConfig = lustre.Config
 local Message = lustre.Message
 
 local SMART_COMPONENTS = { person = "person", vehicle = "vehicle", animal = "animal" }
+-- which capability each component carries
+local COMPONENT_KIND = {
+  main = "motion", person = "motion", vehicle = "motion", animal = "motion",
+  sound = "sound", smoke = "smoke", co = "co",
+}
 local RESYNC_INTERVAL = 600 -- seconds between camera list refreshes
 local WS_KEEPALIVE = 60     -- seconds between websocket pings
 
@@ -29,7 +34,7 @@ local states = {}
 local function get_state(ctrl)
   local s = states[ctrl.id]
   if not s then
-    s = { gen = 0, ws = nil, events = {}, active = {}, cameras = {} }
+    s = { gen = 0, ws = nil, events = {}, active = {}, shown = {}, tokens = {}, cameras = {} }
     states[ctrl.id] = s
   end
   return s
@@ -52,6 +57,7 @@ local function prefs(ctrl)
     host = host,
     key = key,
     timeout = tonumber(p.eventTimeout) or 60,
+    hold = tonumber(p.motionHold) or 0,
     video = p.enableVideo == true,
     quality = p.videoQuality or "medium",
     secure = p.videoSecure == true,
@@ -79,10 +85,24 @@ local function looks_like_doorbell(cam)
   return false
 end
 
-local function wanted_profile(is_doorbell, video)
-  return (is_doorbell and "unifi-doorbell" or "unifi-camera") .. (video and "-video" or "")
+local function wanted_profile(is_doorbell, audio, video)
+  return (is_doorbell and "unifi-doorbell" or "unifi-camera")
+    .. (audio and "-audio" or "") .. (video and "-video" or "")
 end
 
+local function has_audio_detection(cam)
+  local ff = type(cam.featureFlags) == "table" and cam.featureFlags or {}
+  local t = ff.smartDetectAudioTypes
+  return type(t) == "table" and t ~= json.null and #t > 0
+end
+
+local function excluded_list(ctrl)
+  local ex = ctrl:get_field("excluded")
+  if type(ex) ~= "table" then ex = {} end
+  return ex
+end
+
+local emit_led -- defined below
 local function emit_stream(child)
   local url = child:get_field("stream_url")
   if url and child:supports_capability_by_id("videoStream") then
@@ -97,11 +117,36 @@ end
 -- Detection state handling
 ---------------------------------------------------------------------------
 
-local function emit_motion(child, comp, active)
+local function state_event(kind, active)
+  if kind == "sound" then
+    return active and capabilities.soundSensor.sound.detected() or capabilities.soundSensor.sound.not_detected()
+  elseif kind == "smoke" then
+    return active and capabilities.smokeDetector.smoke.detected() or capabilities.smokeDetector.smoke.clear()
+  elseif kind == "co" then
+    return active and capabilities.carbonMonoxideDetector.carbonMonoxide.detected()
+      or capabilities.carbonMonoxideDetector.carbonMonoxide.clear()
+  end
+  return active and capabilities.motionSensor.motion.active() or capabilities.motionSensor.motion.inactive()
+end
+
+local function emit_state(child, comp, active)
   local component = child.profile.components[comp]
   if not component then return end
-  local ev = active and capabilities.motionSensor.motion.active() or capabilities.motionSensor.motion.inactive()
-  child:emit_component_event(component, ev)
+  child:emit_component_event(component, state_event(COMPONENT_KIND[comp] or "motion", active))
+end
+
+local function key2(t, a, b)
+  t[a] = t[a] or {}
+  return t[a]
+end
+
+local function show(driver, ctrl, cam_id, comp, active)
+  local s = get_state(ctrl)
+  local shown = key2(s.shown, cam_id)
+  if shown[comp] == active then return end
+  shown[comp] = active
+  local child = find_child(driver, ctrl, cam_id)
+  if child then emit_state(child, comp, active) end
 end
 
 local function deactivate(driver, ctrl, cam_id, comp, ev_id)
@@ -109,9 +154,20 @@ local function deactivate(driver, ctrl, cam_id, comp, ev_id)
   local per_cam = s.active[cam_id]
   if not per_cam or not per_cam[comp] or not per_cam[comp][ev_id] then return end
   per_cam[comp][ev_id] = nil
-  if next(per_cam[comp]) == nil then
-    local child = find_child(driver, ctrl, cam_id)
-    if child then emit_motion(child, comp, false) end
+  if next(per_cam[comp]) ~= nil then return end
+  local hold = prefs(ctrl).hold
+  if hold > 0 and COMPONENT_KIND[comp] == "motion" then
+    -- occupancy hold: stay active a while unless a new detection arrives
+    local tokens = key2(s.tokens, cam_id)
+    local tok = tokens[comp] or 0
+    driver:call_with_delay(hold, function()
+      local still_empty = not s.active[cam_id] or next(s.active[cam_id][comp] or {}) == nil
+      if (key2(s.tokens, cam_id)[comp] or 0) == tok and still_empty then
+        show(driver, ctrl, cam_id, comp, false)
+      end
+    end, "unifi hold")
+  else
+    show(driver, ctrl, cam_id, comp, false)
   end
 end
 
@@ -121,12 +177,10 @@ local function activate(driver, ctrl, cam_id, comp, ev_id)
   local per_cam = s.active[cam_id]
   per_cam[comp] = per_cam[comp] or {}
   if per_cam[comp][ev_id] then return end
-  local was_empty = next(per_cam[comp]) == nil
   per_cam[comp][ev_id] = true
-  if was_empty then
-    local child = find_child(driver, ctrl, cam_id)
-    if child then emit_motion(child, comp, true) end
-  end
+  local tokens = key2(s.tokens, cam_id)
+  tokens[comp] = (tokens[comp] or 0) + 1
+  show(driver, ctrl, cam_id, comp, true)
   -- safety reset in case the end of the event never arrives
   local timeout = prefs(ctrl).timeout
   driver:call_with_delay(timeout, function()
@@ -142,6 +196,10 @@ local function components_for(ev)
     for t in pairs(ev.smart) do
       if SMART_COMPONENTS[t] then table.insert(comps, SMART_COMPONENTS[t]) end
     end
+  elseif ev.type == "smartAudioDetect" then
+    table.insert(comps, "sound")
+    if ev.smart.alrmSmoke or ev.smart.smoke_cmonx then table.insert(comps, "smoke") end
+    if ev.smart.alrmCmonx or ev.smart.smoke_cmonx then table.insert(comps, "co") end
   end
   return comps
 end
@@ -158,7 +216,7 @@ local function handle_ring(driver, ctrl, cam_id)
   else
     -- camera turned out to be a doorbell: switch profile, then deliver the push
     child:set_field("is_doorbell", true, { persist = true })
-    child:try_update_metadata({ profile = wanted_profile(true, prefs(ctrl).video) })
+    child:try_update_metadata({ profile = wanted_profile(true, child:get_field("has_audio") == true, prefs(ctrl).video) })
     driver:call_with_delay(3, function()
       local c = find_child(driver, ctrl, cam_id)
       if c and c:supports_capability_by_id("button") then
@@ -201,12 +259,11 @@ local function handle_event_message(driver, ctrl, data)
   elseif action == "update" then
     if not ev then return end
     if type(item.smartDetectTypes) == "table" then
-      for _, t in ipairs(item.smartDetectTypes) do
-        if not ev.smart[t] then
-          ev.smart[t] = true
-          if SMART_COMPONENTS[t] and (ev.type == "smartDetectZone" or ev.type == "smartDetectLine") then
-            activate(driver, ctrl, ev.device, SMART_COMPONENTS[t], item.id)
-          end
+      for _, t in ipairs(item.smartDetectTypes) do ev.smart[t] = true end
+      -- newly added types (e.g. vehicle joins person): activate their components
+      if item["end"] == nil or type(item["end"]) ~= "number" then
+        for _, comp in ipairs(components_for(ev)) do
+          activate(driver, ctrl, ev.device, comp, item.id)
         end
       end
     end
@@ -238,6 +295,14 @@ end
 -- Camera sync
 ---------------------------------------------------------------------------
 
+emit_led = function(child)
+  local led = child:get_field("led_on")
+  local component = child.profile.components["led"]
+  if type(led) == "boolean" and component then
+    child:emit_component_event(component, led and capabilities.switch.switch.on() or capabilities.switch.switch.off())
+  end
+end
+
 local function sync_cameras(driver, ctrl)
   local p = prefs(ctrl)
   local s = get_state(ctrl)
@@ -252,7 +317,10 @@ local function sync_cameras(driver, ctrl)
       s.cameras[cam.id] = cam
       local child = find_child(driver, ctrl, cam.id)
       s.pending = s.pending or {}
-      if not child and (s.pending[cam.id] or 0) > os.time() - 60 then
+      local audio = has_audio_detection(cam)
+      if not child and excluded_list(ctrl)[cam.id] then
+        log.debug("[unifi] skipping removed camera " .. tostring(cam.name))
+      elseif not child and (s.pending[cam.id] or 0) > os.time() - 60 then
         log.debug("[unifi] creation pending for " .. tostring(cam.name))
       elseif not child then
         s.pending[cam.id] = os.time()
@@ -261,7 +329,7 @@ local function sync_cameras(driver, ctrl)
         driver:try_create_device({
           type = "EDGE_CHILD",
           label = cam.name or ("UniFi camera " .. cam.id),
-          profile = wanted_profile(doorbell, p.video),
+          profile = wanted_profile(doorbell, audio, p.video),
           manufacturer = "Ubiquiti",
           model = "UniFi Protect camera",
           vendor_provided_label = cam.name or "UniFi camera",
@@ -274,13 +342,23 @@ local function sync_cameras(driver, ctrl)
           doorbell = looks_like_doorbell(cam)
           child:set_field("is_doorbell", doorbell, { persist = true })
         end
+        child:set_field("has_audio", audio, { persist = true })
         local has_button = child:supports_capability_by_id("button")
         local has_video = child:supports_capability_by_id("videoStream")
-        if has_button ~= doorbell or has_video ~= p.video then
+        local has_sound = child:supports_capability_by_id("soundSensor")
+        local has_led = child:supports_capability_by_id("switch")
+        if has_button ~= doorbell or has_video ~= p.video or has_sound ~= audio or not has_led then
           log.info("[unifi] updating profile of " .. child.label)
-          child:try_update_metadata({ profile = wanted_profile(doorbell, p.video) })
+          child:try_update_metadata({ profile = wanted_profile(doorbell, audio, p.video) })
         end
         if cam.state == "CONNECTED" then child:online() else child:offline() end
+
+        -- status LED
+        local led = type(cam.ledSettings) == "table" and cam.ledSettings.isEnabled
+        if type(led) == "boolean" and child:get_field("led_on") ~= led then
+          child:set_field("led_on", led, { persist = true })
+          emit_led(child)
+        end
 
         if p.video then
           local url, serr = api.get_stream_url(p.host, p.key, cam.id, p.quality)
@@ -412,10 +490,13 @@ end
 ---------------------------------------------------------------------------
 
 local function child_init(driver, child)
-  child:emit_event(capabilities.motionSensor.motion.inactive())
+  -- start every detection component in its idle state
+  local ctrl = child:get_parent_device()
+  if ctrl and states[ctrl.id] then states[ctrl.id].shown[child.parent_assigned_child_key] = {} end
   for comp in pairs(child.profile.components) do
-    if comp ~= "main" then emit_motion(child, comp, false) end
+    if COMPONENT_KIND[comp] then emit_state(child, comp, false) end
   end
+  emit_led(child)
   if child:supports_capability_by_id("button") then
     child:emit_event(capabilities.button.supportedButtonValues({ "pushed" }, { visibility = { displayed = false } }))
     child:emit_event(capabilities.button.numberOfButtons({ value = 1 }, { visibility = { displayed = false } }))
@@ -453,6 +534,11 @@ local function info_changed(driver, device, event, args)
   if old.host ~= new.host or old.apiKey ~= new.apiKey then
     log.info("[unifi] connection settings changed, reconnecting")
     start(driver, device)
+  elseif new.readdRemoved == true and old.readdRemoved ~= true then
+    log.info("[unifi] re-adding removed cameras")
+    device:set_field("excluded", {}, { persist = true })
+    get_state(device).pending = {}
+    cosock.spawn(function() sync_cameras(driver, device) end, "unifi re-add")
   elseif old.enableVideo ~= new.enableVideo or old.videoQuality ~= new.videoQuality
       or old.videoSecure ~= new.videoSecure then
     cosock.spawn(function() sync_cameras(driver, device) end, "unifi video sync")
@@ -462,7 +548,16 @@ end
 local discovery_done = false
 
 local function device_removed(driver, device)
-  if not is_child(device) then
+  if is_child(device) then
+    -- remember the removal so the camera does not come back on the next sync
+    local ctrl = device:get_parent_device()
+    if ctrl then
+      local ex = excluded_list(ctrl)
+      ex[device.parent_assigned_child_key] = true
+      ctrl:set_field("excluded", ex, { persist = true })
+      log.info("[unifi] camera removed, will not be re-added: " .. tostring(device.label))
+    end
+  else
     discovery_done = false
     local s = get_state(device)
     s.gen = s.gen + 1
@@ -478,6 +573,23 @@ local function handle_refresh(driver, device)
   else
     start(driver, device)
   end
+end
+
+local function handle_led(driver, device, command)
+  if command.component ~= "led" then return end
+  local on = command.command == "on"
+  local ctrl = device:get_parent_device()
+  if not ctrl then return end
+  local p = prefs(ctrl)
+  local _, err = api.json_request(p.host, p.key, "PATCH", "/v1/cameras/" .. device.parent_assigned_child_key,
+    { ledSettings = { isEnabled = on } })
+  if err then
+    log.warn("[unifi] could not switch LED of " .. device.label .. ": " .. tostring(err))
+    emit_led(device) -- show the real state again
+    return
+  end
+  device:set_field("led_on", on, { persist = true })
+  emit_led(device)
 end
 
 local function handle_start_stream(driver, device)
@@ -512,6 +624,10 @@ end
 local capability_handlers = {
   [capabilities.refresh.ID] = {
     [capabilities.refresh.commands.refresh.NAME] = handle_refresh,
+  },
+  [capabilities.switch.ID] = {
+    [capabilities.switch.commands.on.NAME] = handle_led,
+    [capabilities.switch.commands.off.NAME] = handle_led,
   },
 }
 -- videoStream is optional: never let a missing definition stop the driver

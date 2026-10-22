@@ -30,3 +30,9 @@ components:
         version: 1
     categories:
       - name: MotionSensor
+  - id: led
+    capabilities:
+      - id: switch
+        version: 1
+    categories:
+      - name: Switch

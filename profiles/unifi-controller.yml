@@ -32,6 +32,22 @@ preferences:
       minimum: 10
       maximum: 600
       default: 60
+  - name: "motionHold"
+    title: "Detection hold time (seconds)"
+    description: "Keep motion, person, vehicle and animal active this long after detection ends (0 = off)"
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 0
+      maximum: 1800
+      default: 0
+  - name: "readdRemoved"
+    title: "Re-add removed cameras"
+    description: "Switch on to bring back cameras you deleted in SmartThings, then switch off again"
+    required: false
+    preferenceType: boolean
+    definition:
+      default: false
   - name: "enableVideo"
     title: "Video stream (experimental)"
     description: "Expose the camera RTSP stream to SmartThings. View it via a camera group. Often does not work."
