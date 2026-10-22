@@ -40,6 +40,8 @@ Cameras are created automatically.
 
 ## Settings page on the hub (if the device settings do not open)
 
+> Available from the version uploaded after 2026-10-22. The channel currently serves the 2026-10-22T14:24 build, which does not have this page yet; it will be updated as soon as SmartThings accepts new packages again.
+
 Some users cannot open the settings of the UniFi Protect device in the SmartThings app. The driver therefore also runs a small settings page on your SmartThings hub.
 
 You need the SmartThings CLI once: https://github.com/SmartThingsCommunity/smartthings-cli/releases (Windows: `smartthings.msi`).
