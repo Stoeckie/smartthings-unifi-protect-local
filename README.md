@@ -93,6 +93,10 @@ The Integration API has no endpoints for privacy mode (recording off) or NVR hea
 
 The hub refuses a driver update that changes the components of a profile already used by a device. Never edit existing profiles: add new ones (current set: `upl-*`) and migrate devices with `try_update_metadata`. The original `unifi-*` profiles are kept unchanged for that reason.
 
+Fixed in v2.6 (2026-10-26): the vendored lustre WebSocket crashed once per keep-alive interval (`lustre/ws.lua: attempt to index a nil value (local 'recv')`) and the driver restarted every minute. It kept working because the hub restarts it, but events during the restart were lost. If your logcat shows that line, update to the channel version of 2026-10-26 or later.
+
+A SmartThings v2 hub that is close to its driver limit silently refuses new driver installs (`NotFoundError ... Failed to install Driver`) and also stops picking up updates. Remove unused drivers with `smartthings edge:drivers:prune --hub <id>` first.
+
 ## Logs
 
 `smartthings edge:drivers:logcat`, lines start with `[unifi]`.

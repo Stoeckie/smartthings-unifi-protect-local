@@ -323,7 +323,7 @@ function WebSocket:_handle_select_err(state, err)
       state.pending_pongs =
         state.pending_pongs + 1
     else
-      self._recv_rx:send({err = err})
+      self._recv_tx:send({err = err})
       self.state = "Terminated"
       log.debug("Closing socket")
       self.socket:close()
