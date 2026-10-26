@@ -276,11 +276,13 @@ function WebSocket:_receive_loop()
     log.debug((recv and "recv") or "~recv",
       err or "")
     if not recv then
+      -- timeout: send a keepalive ping (or give up after missed pongs).
+      -- Upstream fell through to _handle_recvs(nil) here and crashed
+      -- with "attempt to index a nil value (local 'recv')".
       if self:_handle_select_err(loop_state, err) then
         return
       end
-    end
-    if self:_handle_recvs(loop_state, recv, 1) then
+    elseif self:_handle_recvs(loop_state, recv, 1) then
       break
     end
   end
