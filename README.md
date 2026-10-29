@@ -95,7 +95,7 @@ The hub refuses a driver update that changes the components of a profile already
 
 Fixed in v2.6 (2026-10-26): the vendored lustre WebSocket crashed once per keep-alive interval (`lustre/ws.lua: attempt to index a nil value (local 'recv')`) and the driver restarted every minute. It kept working because the hub restarts it, but events during the restart were lost. If your logcat shows that line, update to the channel version of 2026-10-26 or later.
 
-A SmartThings v2 hub that is close to its driver limit silently refuses new driver installs (`NotFoundError ... Failed to install Driver`) and also stops picking up updates. Remove unused drivers with `smartthings edge:drivers:prune --hub <id>` first.
+`NotFoundError ... Failed to install Driver` on install: do not use the one step `edge:drivers:package . --channel <id> --hub <id>`. In tests (2026-10-29) that command failed every time, and the version it uploaded kept failing on later installs too. Package, assign and install as separate commands with about two minutes between each step; that version installs fine. If a version already failed, package a new one instead of retrying it. Removing unused drivers from a full v2 hub (`smartthings edge:drivers:prune --hub <id>`) does no harm either.
 
 ## Logs
 
