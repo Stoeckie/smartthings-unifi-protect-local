@@ -530,39 +530,84 @@ local function hub_ip(driver)
   return (ok and ip) or "<hub-ip>"
 end
 
-local function start_settings_page(driver, ctrl)
+-- The settings page is only open while the driver has no API key, or for
+-- SETTINGS_WINDOW seconds after a Refresh of the controller. Once configured it
+-- closes again, so nobody on the LAN can change the settings unnoticed.
+local SETTINGS_WINDOW = 600
+
+local function settings_needed(ctrl)
+  return prefs(ctrl).key == ""
+end
+
+local function close_settings_page(ctrl, why)
+  local s = states[ctrl.id]
+  if not (s and s.settings_srv) then return end
+  s.settings_srv.stop()
+  s.settings_srv, s.settings_url = nil, nil
+  if why then log.info("[unifi] settings page closed (" .. why .. "). Press Refresh on the UniFi Protect device to open it for 10 minutes.") end
+end
+
+local function schedule_settings_check(driver, ctrl)
   local s = get_state(ctrl)
-  if s.settings_port then return end
-  local okc, port, err = pcall(config_server.start, {
-    get_status = function()
-      local p = prefs(ctrl)
-      local text
-      if p.key == "" then text = "not configured"
-      elseif s.ws then text = "connected to " .. p.host
-      else text = "not connected (check IP address and API key)" end
-      return { text = text, host = p.host }
-    end,
-    on_save = function(host, key)
-      log.info("[unifi] settings saved via settings page, connecting to " .. host)
-      ctrl:set_field("cfg_host", host, { persist = true })
-      ctrl:set_field("cfg_key", key, { persist = true })
-      start(driver, ctrl)
-    end,
-  })
-  if not okc or not port then
-    log.warn("[unifi] could not start settings page: " .. tostring(okc and err or port))
-    return
+  if s.settings_check then return end
+  s.settings_check = true
+  driver:call_with_delay(30, function()
+    local st = states[ctrl.id]
+    if not st then return end
+    st.settings_check = false
+    if not st.settings_srv then return end
+    if settings_needed(ctrl) or os.time() < (st.settings_until or 0) then
+      schedule_settings_check(driver, ctrl)
+    else
+      close_settings_page(ctrl, "configured")
+    end
+  end, "unifi settings check")
+end
+
+local function open_settings_page(driver, ctrl)
+  local s = get_state(ctrl)
+  s.settings_until = os.time() + SETTINGS_WINDOW
+  local how = settings_needed(ctrl) and "open until configured" or "open for 10 minutes"
+  if not s.settings_srv then
+    local okc, srv, err = pcall(config_server.start, {
+      get_status = function()
+        local p = prefs(ctrl)
+        local text
+        if p.key == "" then text = "not configured"
+        elseif s.ws then text = "connected to " .. p.host
+        else text = "not connected (check IP address and API key)" end
+        return { text = text, host = p.host }
+      end,
+      on_save = function(host, key)
+        log.info("[unifi] settings saved via settings page, connecting to " .. host)
+        ctrl:set_field("cfg_host", host, { persist = true })
+        ctrl:set_field("cfg_key", key, { persist = true })
+        -- close soon after a save instead of waiting for the full window
+        local st = states[ctrl.id]
+        if st then st.settings_until = os.time() + 60 end
+        start(driver, ctrl)
+      end,
+    })
+    if not okc or not srv then
+      log.warn("[unifi] could not start settings page: " .. tostring(okc and err or srv))
+      return
+    end
+    s.settings_srv = srv
+    s.settings_url = string.format("http://%s:%d/", hub_ip(driver), srv.port)
   end
-  s.settings_port = port
-  s.settings_url = string.format("http://%s:%d/", hub_ip(driver), port)
-  log.info("[unifi] settings page: " .. s.settings_url)
+  log.info("[unifi] settings page: " .. s.settings_url .. " (" .. how .. ")")
+  schedule_settings_check(driver, ctrl)
 end
 
 local function device_init(driver, device)
   if is_child(device) then
     child_init(driver, device)
   else
-    start_settings_page(driver, device)
+    if settings_needed(device) then
+      open_settings_page(driver, device)
+    else
+      log.info("[unifi] settings page closed (configured). Press Refresh on the UniFi Protect device to open it for 10 minutes.")
+    end
     start(driver, device)
   end
 end
@@ -614,6 +659,7 @@ local function device_removed(driver, device)
     end
   else
     discovery_done = false
+    close_settings_page(device)
     local s = get_state(device)
     s.gen = s.gen + 1
     close_ws(s)
@@ -626,8 +672,7 @@ local function handle_refresh(driver, device)
     local ctrl = device:get_parent_device()
     if ctrl then cosock.spawn(function() sync_cameras(driver, ctrl) end, "unifi refresh") end
   else
-    local s = get_state(device)
-    if s.settings_url then log.info("[unifi] settings page: " .. s.settings_url) end
+    open_settings_page(driver, device)
     start(driver, device)
   end
 end
@@ -707,5 +752,5 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.6, keep-alive fix)")
+log.info("[unifi] UniFi Protect Local driver starting (v2.7)")
 driver:run()

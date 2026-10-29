@@ -52,11 +52,12 @@ You need the SmartThings CLI once: https://github.com/SmartThingsCommunity/smart
    irm https://raw.githubusercontent.com/Stoeckie/smartthings-unifi-protect-local/main/tools/find-settings-page.ps1 | iex
    ```
    It asks for your hub IP, finds the UniFi Protect device, reads the hub log and prints and opens the address of the settings page, for example `http://192.168.1.20:41234/` (your hub IP plus the port the hub handed out). The first time, the CLI opens a browser to log in. You can read the script first: [tools/find-settings-page.ps1](tools/find-settings-page.ps1).
-3. No luck? Watch the log yourself: `smartthings edge:drivers:logcat 27595fa5-a979-491e-8c16-6cf5362cd859 --hub-address <hub-ip>` and look for `[unifi] settings page: http://...`. Without an API key the address is repeated every minute; otherwise press Refresh on the UniFi Protect device to print it again.
+3. No luck? Watch the log yourself: `smartthings edge:drivers:logcat 27595fa5-a979-491e-8c16-6cf5362cd859 --hub-address <hub-ip>` and look for `[unifi] settings page: http://...`. Without an API key the address is repeated every minute; otherwise press Refresh on the UniFi Protect device to open the page for 10 minutes and print the address.
 4. Open that address in a browser on a device in your home network.
 5. Enter the IP address of your UniFi console and your API key, then **Save and connect**.
 
 Notes:
+* For security the page is only open while the driver has no API key, and for 10 minutes after you press Refresh on the UniFi Protect device (the script above does that for you). About a minute after you save, it closes again. There is no password on the page, so this keeps others on your network from changing the settings unnoticed.
 * The values are stored on your hub only. They are not part of the driver and are never shared.
 * The page never shows your key. IP address and key are always saved together.
 * The port changes every time the driver restarts (hub reboot, driver update). You only need the page once; the saved values survive restarts.

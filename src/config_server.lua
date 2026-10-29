@@ -64,15 +64,20 @@ local function respond(client, code, body)
   client:send(head .. body)
 end
 
+local MAX_HEADERS = 40
+local MAX_CLIENTS = 4
+
 local function read_request(client)
   client:settimeout(5)
   local line, err = client:receive("*l")
   if not line then return nil, err end
+  if #line > 2048 then return nil, "request line too long" end
   local method, path = line:match("^(%u+)%s+(%S+)")
   local headers = {}
-  while true do
+  for _ = 1, MAX_HEADERS + 1 do
     local h = client:receive("*l")
     if not h or h == "" then break end
+    if #h > 2048 then return nil, "header too long" end
     local k, v = h:match("^([^:]+):%s*(.-)%s*$")
     if k then headers[k:lower()] = v end
   end
@@ -93,19 +98,30 @@ end
 --- Start the settings page.
 -- opts.get_status() -> { text = string, host = string }
 -- opts.on_save(host, key) is called with validated values.
--- Returns the port number, or nil and an error.
+-- Returns a server object { port = number, stop = function, running = bool },
+-- or nil and an error. stop() closes the listening port within a few seconds.
 function M.start(opts)
   local server, err = socket.tcp()
   if not server then return nil, err end
   local ok, berr = server:bind("*", 0) -- Edge only allows port 0 (random port)
   if not ok then return nil, "bind: " .. tostring(berr) end
   server:listen(4)
+  server:settimeout(2) -- wake up regularly so stop() takes effect
   local _, port = server:getsockname()
 
+  local srv = { port = port, running = true }
+  local clients = 0
+  function srv.stop() srv.running = false end
+
   cosock.spawn(function()
-    while true do
+    while srv.running do
       local client = server:accept()
-      if client then
+      if client and not srv.running then
+        client:close()
+      elseif client and clients >= MAX_CLIENTS then
+        client:close()
+      elseif client then
+        clients = clients + 1
         cosock.spawn(function()
           local okh, herr = pcall(function()
             local req = read_request(client)
@@ -121,7 +137,8 @@ function M.start(opts)
               else
                 opts.on_save(host, key)
                 respond(client, 200, page("Saved", '<p class="ok">Saved. The driver is connecting to ' .. html_escape(host) ..
-                  '.</p><p>Check the UniFi Protect device in the SmartThings app in a minute.</p><p><a href="/">Back</a></p>'))
+                  '.</p><p>Check the UniFi Protect device in the SmartThings app in a minute.</p>' ..
+                  '<p class="note">For your security this page closes itself shortly. Press Refresh on the UniFi Protect device to open it again for 10 minutes.</p>'))
               end
             else
               respond(client, 404, page("Not found", '<p><a href="/">Settings</a></p>'))
@@ -129,12 +146,14 @@ function M.start(opts)
           end)
           if not okh then log.warn("[unifi] settings page error: " .. tostring(herr)) end
           client:close()
+          clients = clients - 1
         end, "unifi settings client")
       end
     end
+    server:close()
   end, "unifi settings server")
 
-  return port
+  return srv
 end
 
 M._parse_form = parse_form
