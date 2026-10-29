@@ -47,10 +47,10 @@ The address of that page is `http://<IP of your SmartThings hub>:<port>/`. The p
 You need the SmartThings CLI once: https://github.com/SmartThingsCommunity/smartthings-cli/releases (Windows: `smartthings.msi`).
 
 1. Find the IP address of your SmartThings hub (SmartThings app: open the hub device > Information, or look it up in your router).
-2. Open PowerShell, fill in your hub IP on the second line and paste the whole block:
+2. Copy the block below, replace `FILL-IN-YOUR-HUB-IP` with the IP address of your SmartThings hub from step 1 (not the UniFi console), and paste the whole block in PowerShell:
    ```powershell
    $st     = "C:\Program Files\SmartThings\smartthings.exe"   # or just "smartthings" if it is on your PATH
-   $hubIp  = "192.168.1.20"                                     # IP address of your SmartThings hub
+   $hubIp  = "FILL-IN-YOUR-HUB-IP"   # replace with the IP address of your SmartThings hub, for example 192.168.1.20
    $driver = "27595fa5-a979-491e-8c16-6cf5362cd859"             # UniFi Protect Local
    # find the UniFi Protect device and ask it to print the address again in 8 seconds
    $all  = & $st devices --type LAN -j | Out-String | ConvertFrom-Json
