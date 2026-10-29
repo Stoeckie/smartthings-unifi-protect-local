@@ -46,21 +46,13 @@ The address of that page is `http://<IP of your SmartThings hub>:<port>/`. The p
 
 You need the SmartThings CLI once: https://github.com/SmartThingsCommunity/smartthings-cli/releases (Windows: `smartthings.msi`).
 
-1. Find the IP address of your SmartThings hub (SmartThings app: open the hub device > Information, or look it up in your router).
-2. Copy the block below, replace `FILL-IN-YOUR-HUB-IP` with the IP address of your SmartThings hub from step 1 (not the UniFi console), and paste the whole block in PowerShell:
+1. Find the IP address of your SmartThings hub (SmartThings app: open the hub device > Information, or look it up in your router). Not the IP address of the UniFi console.
+2. Open PowerShell and run:
    ```powershell
-   $st     = "C:\Program Files\SmartThings\smartthings.exe"   # or just "smartthings" if it is on your PATH
-   $hubIp  = "FILL-IN-YOUR-HUB-IP"   # replace with the IP address of your SmartThings hub, for example 192.168.1.20
-   $driver = "27595fa5-a979-491e-8c16-6cf5362cd859"             # UniFi Protect Local
-   # find the UniFi Protect device and ask it to print the address again in 8 seconds
-   $all  = & $st devices --type LAN -j | Out-String | ConvertFrom-Json
-   $id   = ($all | Where-Object { $_.lan.networkId -like "unifi-protect-local-*" -or $_.name -eq "UniFi Protect" } | Select-Object -First 1).deviceId
-   Start-Job { Start-Sleep 8; & $using:st devices:commands $using:id refresh:refresh } | Out-Null
-   # show only the lines of this driver; stop with Ctrl+C
-   & $st edge:drivers:logcat $driver --hub-address $hubIp | Select-String "\[unifi\]"
+   irm https://raw.githubusercontent.com/Stoeckie/smartthings-unifi-protect-local/main/tools/find-settings-page.ps1 | iex
    ```
-   The first time, the CLI opens a browser to log in.
-3. Within about 10 seconds you see a line like `[unifi] settings page: http://192.168.1.20:41234/`: your hub IP plus the port the hub handed out. (Without an API key the driver also repeats the address every minute in a `[unifi] controller not configured` line.) Pressing Refresh on the device does the same, but the block above works without opening the device.
+   It asks for your hub IP, finds the UniFi Protect device, reads the hub log and prints and opens the address of the settings page, for example `http://192.168.1.20:41234/` (your hub IP plus the port the hub handed out). The first time, the CLI opens a browser to log in. You can read the script first: [tools/find-settings-page.ps1](tools/find-settings-page.ps1).
+3. No luck? Watch the log yourself: `smartthings edge:drivers:logcat 27595fa5-a979-491e-8c16-6cf5362cd859 --hub-address <hub-ip>` and look for `[unifi] settings page: http://...`. Without an API key the address is repeated every minute; otherwise press Refresh on the UniFi Protect device to print it again.
 4. Open that address in a browser on a device in your home network.
 5. Enter the IP address of your UniFi console and your API key, then **Save and connect**.
 
