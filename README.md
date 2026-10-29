@@ -55,7 +55,7 @@ You need the SmartThings CLI once: https://github.com/SmartThingsCommunity/smart
 3. Look for the address of the page. The line looks like `[unifi] settings page: http://192.168.1.20:41234/`, where 192.168.1.20 is your hub and 41234 the port the hub handed out. While no API key is set, the driver repeats the address every minute in a line that starts with `[unifi] controller not configured`. Already configured, or nothing appears? Send a refresh to the UniFi Protect device; that prints the address again. Without the app, in a second window:
    ```
    smartthings devices
-   smartthings devices:commands <id of the UniFi Protect device> refresh
+   smartthings devices:commands <id of the UniFi Protect device> refresh:refresh
    ```
 4. Open that address in a browser on a device in your home network.
 5. Enter the IP address of your UniFi console and your API key, then **Save and connect**.
