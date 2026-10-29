@@ -40,9 +40,9 @@ Cameras are created automatically.
 
 ## Settings page on the hub (if the device settings do not open)
 
-> Available from the version uploaded after 2026-10-22. The channel currently serves the 2026-10-22T14:24 build, which does not have this page yet; it will be updated as soon as SmartThings accepts new packages again.
+Some users cannot open the settings of the UniFi Protect device in the SmartThings app. The driver therefore also runs a small settings page on your SmartThings hub (not on the UniFi console).
 
-Some users cannot open the settings of the UniFi Protect device in the SmartThings app. The driver therefore also runs a small settings page on your SmartThings hub.
+The address of that page is `http://<IP of your SmartThings hub>:<port>/`. The port is not fixed: Edge drivers may not choose their own port, so the hub hands out a random free port each time the driver starts. The driver writes the full address to the hub log, so you read it from there.
 
 You need the SmartThings CLI once: https://github.com/SmartThingsCommunity/smartthings-cli/releases (Windows: `smartthings.msi`).
 
@@ -52,14 +52,18 @@ You need the SmartThings CLI once: https://github.com/SmartThingsCommunity/smart
    smartthings edge:drivers:logcat --hub-address <hub-ip>
    ```
    Choose **UniFi Protect Local** if you are asked for a driver.
-3. Wait for a line like `[unifi] settings page: http://192.168.1.20:41234/`. While the driver has no API key, this line repeats every minute. Already configured? Press Refresh on the UniFi Protect device to show the line again.
-4. Open that address in a browser on your home network.
-5. Enter the console IP address and your API key, then **Save and connect**.
+3. Look for the address of the page. The line looks like `[unifi] settings page: http://192.168.1.20:41234/`, where 192.168.1.20 is your hub and 41234 the port the hub handed out. While no API key is set, the driver repeats the address every minute in a line that starts with `[unifi] controller not configured`. Already configured, or nothing appears? Send a refresh to the UniFi Protect device; that prints the address again. Without the app, in a second window:
+   ```
+   smartthings devices
+   smartthings devices:commands <id of the UniFi Protect device> refresh
+   ```
+4. Open that address in a browser on a device in your home network.
+5. Enter the IP address of your UniFi console and your API key, then **Save and connect**.
 
 Notes:
 * The values are stored on your hub only. They are not part of the driver and are never shared.
 * The page never shows your key. IP address and key are always saved together.
-* The port changes when the driver restarts; you only need the page once.
+* The port changes every time the driver restarts (hub reboot, driver update). You only need the page once; the saved values survive restarts.
 * Values entered in the SmartThings app settings take priority when filled in.
 
 ## Settings
