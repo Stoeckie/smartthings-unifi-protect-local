@@ -432,7 +432,7 @@ local function run(driver, ctrl, gen)
     local p = prefs(ctrl)
     if p.host == "" or p.key == "" then
       log.warn("[unifi] controller not configured: set Console IP address and API key in the app settings, or open "
-        .. tostring(s.settings_url or "the settings page"))
+        .. tostring(s.settings_url or "the settings page (press Refresh on the UniFi Protect device to open it for 15 minutes)"))
       ctrl:offline()
       socket.sleep(60)
       goto continue
@@ -530,10 +530,10 @@ local function hub_ip(driver)
   return (ok and ip) or "<hub-ip>"
 end
 
--- The settings page is only open while the driver has no API key, or for
--- SETTINGS_WINDOW seconds after a Refresh of the controller. Once configured it
--- closes again, so nobody on the LAN can change the settings unnoticed.
-local SETTINGS_WINDOW = 600
+-- The settings page is never open for more than SETTINGS_WINDOW seconds: after the driver starts
+-- without an API key, or after a Refresh of the controller. Then it closes again, configured or not,
+-- so nobody on the LAN can change the settings unnoticed.
+local SETTINGS_WINDOW = 900
 
 local function settings_needed(ctrl)
   return prefs(ctrl).key == ""
@@ -544,7 +544,7 @@ local function close_settings_page(ctrl, why)
   if not (s and s.settings_srv) then return end
   s.settings_srv.stop()
   s.settings_srv, s.settings_url = nil, nil
-  if why then log.info("[unifi] settings page closed (" .. why .. "). Press Refresh on the UniFi Protect device to open it for 10 minutes.") end
+  if why then log.info("[unifi] settings page closed (" .. why .. "). Press Refresh on the UniFi Protect device to open it for 15 minutes.") end
 end
 
 local function schedule_settings_check(driver, ctrl)
@@ -556,10 +556,10 @@ local function schedule_settings_check(driver, ctrl)
     if not st then return end
     st.settings_check = false
     if not st.settings_srv then return end
-    if settings_needed(ctrl) or os.time() < (st.settings_until or 0) then
+    if os.time() < (st.settings_until or 0) then
       schedule_settings_check(driver, ctrl)
     else
-      close_settings_page(ctrl, "configured")
+      close_settings_page(ctrl, settings_needed(ctrl) and "15 minutes passed" or "configured")
     end
   end, "unifi settings check")
 end
@@ -567,7 +567,7 @@ end
 local function open_settings_page(driver, ctrl)
   local s = get_state(ctrl)
   s.settings_until = os.time() + SETTINGS_WINDOW
-  local how = settings_needed(ctrl) and "open until configured" or "open for 10 minutes"
+  local how = "open for 15 minutes"
   if not s.settings_srv then
     local okc, srv, err = pcall(config_server.start, {
       get_status = function()
@@ -606,7 +606,7 @@ local function device_init(driver, device)
     if settings_needed(device) then
       open_settings_page(driver, device)
     else
-      log.info("[unifi] settings page closed (configured). Press Refresh on the UniFi Protect device to open it for 10 minutes.")
+      log.info("[unifi] settings page closed (configured). Press Refresh on the UniFi Protect device to open it for 15 minutes.")
     end
     start(driver, device)
   end
@@ -752,5 +752,5 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.7)")
+log.info("[unifi] UniFi Protect Local driver starting (v2.8)")
 driver:run()

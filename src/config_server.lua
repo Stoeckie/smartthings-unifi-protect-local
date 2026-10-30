@@ -59,13 +59,23 @@ end
 local function respond(client, code, body)
   local reason = ({ [200] = "OK", [400] = "Bad Request", [404] = "Not Found", [303] = "See Other" })[code] or "OK"
   local head = string.format(
-    "HTTP/1.1 %d %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
+    "HTTP/1.1 %d %s\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: %d\r\nCache-Control: no-store\r\nX-Frame-Options: DENY\r\nConnection: close\r\n\r\n",
     code, reason, #body)
   client:send(head .. body)
 end
 
 local MAX_HEADERS = 40
 local MAX_CLIENTS = 4
+
+--- Refuse requests that a web page on another site could make through the visitor's browser:
+--- the page must be addressed by IP (no DNS rebinding) and a form must come from this page itself.
+local function allowed(req)
+  local host = (req.headers or {})["host"] or ""
+  if not host:match("^%d+%.%d+%.%d+%.%d+:?%d*$") then return false end
+  local origin = (req.headers or {})["origin"]
+  if origin and origin ~= ("http://" .. host) then return false end
+  return true
+end
 
 local function read_request(client)
   client:settimeout(5)
@@ -126,7 +136,9 @@ function M.start(opts)
           local okh, herr = pcall(function()
             local req = read_request(client)
             if not req then return end
-            if req.method == "GET" and (req.path == "/" or req.path:match("^/%?")) then
+            if not allowed(req) then
+              respond(client, 400, page("Not allowed", '<p class="err">Open this page with the hub IP address.</p>'))
+            elseif req.method == "GET" and (req.path == "/" or req.path:match("^/%?")) then
               respond(client, 200, form_page(opts.get_status()))
             elseif req.method == "POST" and req.path == "/save" then
               local form = parse_form(req.body)
@@ -138,7 +150,7 @@ function M.start(opts)
                 opts.on_save(host, key)
                 respond(client, 200, page("Saved", '<p class="ok">Saved. The driver is connecting to ' .. html_escape(host) ..
                   '.</p><p>Check the UniFi Protect device in the SmartThings app in a minute.</p>' ..
-                  '<p class="note">For your security this page closes itself shortly. Press Refresh on the UniFi Protect device to open it again for 10 minutes.</p>'))
+                  '<p class="note">For your security this page closes itself shortly. Press Refresh on the UniFi Protect device to open it again for 15 minutes.</p>'))
               end
             else
               respond(client, 404, page("Not found", '<p><a href="/">Settings</a></p>'))
@@ -159,5 +171,7 @@ end
 M._parse_form = parse_form
 M._valid_host = valid_host
 M._valid_key = valid_key
+
+M._allowed = allowed
 
 return M
