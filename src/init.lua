@@ -752,5 +752,5 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.8)")
+log.info("[unifi] UniFi Protect Local driver starting (v2.8.1)")
 driver:run()

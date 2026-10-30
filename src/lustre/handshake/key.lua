@@ -1,5 +1,7 @@
 local sha1 = require"sha1"
-local base64 = require"st.base64"
+-- the hub ships "base64"; st.base64 is deprecated (kept as fallback for older firmware)
+local ok_b64, base64 = pcall(require, "base64")
+if not ok_b64 or type(base64) ~= "table" or not base64.encode then base64 = require "st.base64" end
 local seeded = false
 local function seed_once()
   if seeded then
