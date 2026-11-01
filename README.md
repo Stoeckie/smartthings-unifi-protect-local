@@ -46,6 +46,8 @@ If UniFi controller device > Connection is Offline, then send a notification to 
 
 Short drops (a reconnect or one missed poll) are ignored: Connection only turns Offline after 2 minutes without a connection.
 
+Every drop is remembered. When the connection is back, the device shows **Last drop**: time (UTC), how long it lasted and the reason (for example "session closed" or "timeout"). Older drops are in the device history.
+
 ## Settings page on the hub (if the device settings do not open)
 
 Some users cannot open the settings of the UniFi Protect device in the SmartThings app. The driver therefore also runs a small settings page on your SmartThings hub (not on the UniFi console).
