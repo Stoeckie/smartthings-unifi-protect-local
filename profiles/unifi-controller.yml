@@ -2,6 +2,8 @@ name: unifi-controller
 components:
   - id: main
     capabilities:
+      - id: silvervalley08660.connectionStatus
+        version: 1
       - id: refresh
         version: 1
     categories:

@@ -4,6 +4,16 @@
 
 local Driver = require "st.driver"
 local capabilities = require "st.capabilities"
+
+-- Connection status as a capability, so routines can notify when this device loses its connection
+-- (SmartThings itself has no "device offline" trigger for routines).
+local conn_cap = capabilities["silvervalley08660.connectionStatus"]
+local function set_conn(dev, up)
+  local v = up and "online" or "offline"
+  if dev:get_field("conn_status") == v then return end
+  local ok = pcall(function() dev:emit_event(conn_cap.status(v)) end)
+  if ok then dev:set_field("conn_status", v) end
+end
 local cosock = require "cosock"
 local socket = require "cosock.socket"
 local json = require "st.json"
@@ -433,7 +443,7 @@ local function run(driver, ctrl, gen)
     if p.host == "" or p.key == "" then
       log.warn("[unifi] controller not configured: set Console IP address and API key in the app settings, or open "
         .. tostring(s.settings_url or "the settings page (press Refresh on the UniFi Protect device to open it for 15 minutes)"))
-      ctrl:offline()
+      set_conn(ctrl, false); ctrl:offline()
       socket.sleep(60)
       goto continue
     end
@@ -448,13 +458,13 @@ local function run(driver, ctrl, gen)
 
     if not ws then
       log.error("[unifi] connection failed: " .. tostring(err))
-      ctrl:offline()
+      set_conn(ctrl, false); ctrl:offline()
       set_children_offline(driver, ctrl)
       socket.sleep(backoff)
       backoff = math.min(backoff * 2, 300)
     else
       s.ws = ws
-      ctrl:online()
+      ctrl:online(); set_conn(ctrl, true)
       backoff = 5
       log.info("[unifi] event stream open")
       while s.gen == gen do
@@ -487,7 +497,7 @@ local function run(driver, ctrl, gen)
       end
       if s.ws == ws then close_ws(s) end
       if s.gen == gen then
-        ctrl:offline()
+        set_conn(ctrl, false); ctrl:offline()
         socket.sleep(backoff)
       end
     end
@@ -752,5 +762,5 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.8.1)")
+log.info("[unifi] UniFi Protect Local driver starting (v2.9.0)")
 driver:run()
