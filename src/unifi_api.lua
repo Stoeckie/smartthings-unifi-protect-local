@@ -5,6 +5,7 @@ local socket = require "cosock.socket"
 local ssl = require "cosock.ssl"
 local json = require "st.json"
 local log = require "log"
+local pin = require "certpin"
 
 local M = {}
 
@@ -14,7 +15,7 @@ M.EVENTS_WS = "/proxy/protect/integration/v1/subscribe/events"
 local TIMEOUT = 10
 
 --- Open a TLS connection to host:port.
-function M.tls_connect(host, port, timeout)
+function M.tls_connect(host, port, timeout, secret)
   local sock, err = socket.tcp()
   if not sock then return nil, "tcp: " .. tostring(err) end
   sock:settimeout(timeout or TIMEOUT)
@@ -39,12 +40,14 @@ function M.tls_connect(host, port, timeout)
     tls:close()
     return nil, "tls handshake: " .. tostring(herr)
   end
+  local okp, perr = pin.check(tls, host, secret)
+  if not okp then tls:close(); return nil, perr end
   return tls
 end
 
 --- Perform one HTTPS request. Returns status, body (string), err.
 function M.request(host, api_key, method, path, body_tbl)
-  local sock, err = M.tls_connect(host, 443)
+  local sock, err = M.tls_connect(host, 443, nil, api_key)
   if not sock then return nil, nil, err end
 
   local body = body_tbl and json.encode(body_tbl) or nil

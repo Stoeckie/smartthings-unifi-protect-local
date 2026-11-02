@@ -447,7 +447,7 @@ end
 ---------------------------------------------------------------------------
 
 local function open_events_ws(host, key)
-  local sock, err = api.tls_connect(host, 443, 10)
+  local sock, err = api.tls_connect(host, 443, 10, key)
   if not sock then return nil, err end
   local config = LustreConfig.default():keep_alive(WS_KEEPALIVE):header("X-API-KEY", key)
   local ws = WebSocket.client(sock, api.EVENTS_WS, config)
@@ -803,5 +803,12 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.9.2)")
+log.info("[unifi] UniFi Protect Local driver starting (v2.10.0)")
+-- certificate pinning: which controller device owns an address
+require("certpin").lookup = function(host)
+  for _, d in ipairs(driver:get_devices()) do
+    if d.parent_assigned_child_key == nil and prefs(d).host == host then return d end
+  end
+end
+
 driver:run()
