@@ -114,7 +114,7 @@ Fixed in v2.6 (2026-10-26): the vendored lustre WebSocket crashed once per keep-
 
 ## Certificate pinning
 
-The console uses a self-signed certificate, so it cannot be checked against a certificate authority. The driver remembers the console's certificate (SHA-256 fingerprint) at the first connection that carries the API key. When another certificate answers later (another device on that address, or someone in between), the driver refuses and does not send the API key; the log says so. Replaced the console? Enter the API key again: the next certificate is then trusted. On a hub that cannot read certificates the driver logs that pinning is off and works as before.
+The console uses a self-signed certificate, so it cannot be checked against a certificate authority. The driver remembers the console's certificate (a hash of the certificate; SmartThings hubs cannot give the usual fingerprint) at the first connection that carries the API key. When another certificate answers later (another device on that address, or someone in between), the driver refuses and does not send the API key; the log says so. Replaced the console? Enter the API key again: the next certificate is then trusted. On a hub that cannot read certificates the driver logs that pinning is off and works as before.
 
 ## How it works
 
