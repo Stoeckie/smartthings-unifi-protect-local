@@ -7,11 +7,17 @@ local capabilities = require "st.capabilities"
 
 -- Connection status as a capability, so routines can notify when this device loses its connection
 -- (SmartThings itself has no "device offline" trigger for routines).
--- Short drops (a reconnect, one missed poll) are ignored: Offline is only emitted after CONN_GRACE seconds down.
+-- Short drops (a reconnect, one missed poll) are ignored: Offline is only emitted after the "Offline after" setting (default 30 min) down.
 -- Every drop is remembered (time, duration, reason) and shown as "Last drop" once the connection is back.
 local conn_cap = capabilities["silvervalley08660.connectionStatus"]
 local drop_cap = capabilities["silvervalley08660.connectionLog"]
-local CONN_GRACE = 120
+local CONN_GRACE = 1800
+local function conn_grace(dev)
+  -- setting "Offline after (minutes)": a router or network update at night takes a few minutes
+  local m = tonumber(dev.preferences and dev.preferences.offlineAfter)
+  if m and m >= 1 then return math.floor(m * 60) end
+  return CONN_GRACE
+end
 local function emit_conn(dev, v)
   if dev:get_field("conn_status") == v then return end
   local ok = pcall(function() dev:emit_event(conn_cap.status(v)) end)
@@ -54,7 +60,7 @@ local function set_conn(dev, up, reason)
   local since = os.time()
   dev:set_field("conn_down_since", since)
   local ok = pcall(function()
-    dev.thread:call_with_delay(CONN_GRACE, function()
+    dev.thread:call_with_delay(conn_grace(dev), function()
       if dev:get_field("conn_down_since") == since then emit_conn(dev, "offline") end
     end)
   end)
@@ -811,7 +817,7 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.10.1)")
+log.info("[unifi] UniFi Protect Local driver starting (v2.10.2)")
 -- certificate pinning: which controller device owns an address
 require("certpin").lookup = function(host)
   for _, d in ipairs(driver:get_devices()) do

@@ -11,6 +11,15 @@ components:
     categories:
       - name: Bridges
 preferences:
+  - name: offlineAfter
+    title: Offline after (minutes)
+    description: "Connection only turns Offline after this many minutes without contact, so a short network outage (e.g. a router update at night) gives no notification."
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 1
+      maximum: 120
+      default: 30
   - name: "host"
     title: "Console IP address"
     description: "Local IP address of your UniFi console, for example 192.168.1.1 (or use the settings page, see README)"
