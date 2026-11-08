@@ -37,6 +37,14 @@ end
 local function set_conn(dev, up, reason)
   if up then
     dev:set_field("conn_down_since", nil)
+    if not dev:get_field("drop_seen") then
+      -- the app wants a value for every attribute ("not all status information updated yet" otherwise)
+      dev:set_field("drop_seen", true)
+      local ok, v = pcall(dev.get_latest_state, dev, "main", drop_cap.ID, "lastDrop")
+      if ok and v == nil and not dev:get_field("conn_drop") then
+        pcall(function() dev:emit_event(drop_cap.lastDrop("No drops yet")) end)
+      end
+    end
     report_drop(dev)
     emit_conn(dev, "online")
     return
@@ -803,7 +811,7 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.10.0)")
+log.info("[unifi] UniFi Protect Local driver starting (v2.10.1)")
 -- certificate pinning: which controller device owns an address
 require("certpin").lookup = function(host)
   for _, d in ipairs(driver:get_devices()) do
