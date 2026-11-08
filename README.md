@@ -34,6 +34,7 @@ Events arrive in real time over the Protect events WebSocket.
 1. Join the channel: **https://bestow-regional.api.smartthings.com/invite/qWjBdybRNG2y**
    Log in, accept, enroll your hub and install **UniFi Protect Local**.
 2. In the SmartThings app: Add device > Scan nearby. A device **UniFi Protect** appears.
+   Have more than one SmartThings hub? Install the driver on one hub only. A scan runs on every hub of the location, and a hub that has the driver but no UniFi Protect device yet adds one.
 3. Open its settings and enter the **Console IP address** (e.g. `192.168.1.1`) and your **API key**.
 
 Cameras are created automatically.
