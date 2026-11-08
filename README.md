@@ -111,6 +111,8 @@ Fixed in v2.6 (2026-10-26): the vendored lustre WebSocket crashed once per keep-
 
 `NotFoundError ... Failed to install Driver` on install: do not use the one step `edge:drivers:package . --channel <id> --hub <id>`. In tests (2026-10-29) that command failed every time, and the version it uploaded kept failing on later installs too. Package, assign and install as separate commands with about two minutes between each step; that version installs fine. If a version already failed, package a new one instead of retrying it. Removing unused drivers from a full v2 hub (`smartthings edge:drivers:prune --hub <id>`) does no harm either.
 
+v2.11 (2026-11-09): a value only goes to the hub when it changed (the stream URL and the LED state were re-emitted on every camera sync); after a driver start every value is sent once so the app catches up. The list of removed cameras is stored as a JSON string.
+
 ## Logs
 
 `smartthings edge:drivers:logcat`, lines start with `[unifi]`.

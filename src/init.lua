@@ -73,6 +73,7 @@ local log = require "log"
 
 local api = require "unifi_api"
 local config_server = require "config_server"
+local emitq = require "emitq"  -- only changed values go to the hub (see emitq.lua)
 local ok_cfg, local_config = pcall(require, "local_config")
 if not ok_cfg or type(local_config) ~= "table" then local_config = {} end
 local lustre = require "lustre"
@@ -176,10 +177,19 @@ local function has_audio_detection(cam)
   return type(t) == "table" and t ~= json.null and #t > 0
 end
 
+-- cameras removed by the user, so they do not come back on the next sync. Stored as a JSON string: a persisted
+-- Lua table is not reliable on every device type (a child device reads it back empty), a string is.
 local function excluded_list(ctrl)
   local ex = ctrl:get_field("excluded")
+  if type(ex) == "string" then
+    local ok, t = pcall(json.decode, ex)
+    return (ok and type(t) == "table") and t or {}
+  end
   if type(ex) ~= "table" then ex = {} end
   return ex
+end
+local function save_excluded(ctrl, ex)
+  ctrl:set_field("excluded", json.encode(ex), { persist = true })
 end
 
 local emit_led -- defined below
@@ -187,7 +197,7 @@ local function emit_stream(child)
   local url = child:get_field("stream_url")
   if url and child:supports_capability_by_id("videoStream") then
     local ok, err = pcall(function()
-      child:emit_event(capabilities.videoStream.stream({ InHomeURL = url, OutHomeURL = url }))
+      emitq.emit(child, capabilities.videoStream.stream({ InHomeURL = url, OutHomeURL = url }))
     end)
     if not ok then log.warn("[unifi] could not emit stream: " .. tostring(err)) end
   end
@@ -212,7 +222,7 @@ end
 local function emit_state(child, comp, active)
   local component = child.profile.components[comp]
   if not component then return end
-  child:emit_component_event(component, state_event(COMPONENT_KIND[comp] or "motion", active))
+  emitq.try(child, state_event(COMPONENT_KIND[comp] or "motion", active), component)
 end
 
 local function key2(t, a, b)
@@ -379,7 +389,7 @@ emit_led = function(child)
   local led = child:get_field("led_on")
   local component = child.profile.components["led"]
   if type(led) == "boolean" and component then
-    child:emit_component_event(component, led and capabilities.switch.switch.on() or capabilities.switch.switch.off())
+    emitq.try(child, led and capabilities.switch.switch.on() or capabilities.switch.switch.off(), component)
   end
 end
 
@@ -701,7 +711,7 @@ local function info_changed(driver, device, event, args)
     start(driver, device)
   elseif new.readdRemoved == true and old.readdRemoved ~= true then
     log.info("[unifi] re-adding removed cameras")
-    device:set_field("excluded", {}, { persist = true })
+    save_excluded(device, {})
     get_state(device).pending = {}
     cosock.spawn(function() sync_cameras(driver, device) end, "unifi re-add")
   elseif old.enableVideo ~= new.enableVideo or old.videoQuality ~= new.videoQuality
@@ -713,13 +723,14 @@ end
 local discovery_done = false
 
 local function device_removed(driver, device)
+  emitq.forget(device)
   if is_child(device) then
     -- remember the removal so the camera does not come back on the next sync
     local ctrl = device:get_parent_device()
     if ctrl then
       local ex = excluded_list(ctrl)
       ex[device.parent_assigned_child_key] = true
-      ctrl:set_field("excluded", ex, { persist = true })
+      save_excluded(ctrl, ex)
       log.info("[unifi] camera removed, will not be re-added: " .. tostring(device.label))
     end
   else
@@ -817,7 +828,7 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.10.2)")
+log.info("[unifi] UniFi Protect Local driver starting (v2.11)")
 -- certificate pinning: which controller device owns an address
 require("certpin").lookup = function(host)
   for _, d in ipairs(driver:get_devices()) do
