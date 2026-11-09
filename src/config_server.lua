@@ -45,7 +45,7 @@ end
 local function form_page(status)
   return page("UniFi Protect Local", [[
 <p class="note">Status: ]] .. html_escape(status.text) .. [[</p>
-<form method="post" action="/save">
+<form method="post" action="save">
 <label for="host">Console IP address</label>
 <input id="host" name="host" value="]] .. html_escape(status.host) .. [[" placeholder="192.168.1.1" required>
 <label for="key">API key</label>
@@ -110,6 +110,27 @@ end
 -- opts.on_save(host, key) is called with validated values.
 -- Returns a server object { port = number, stop = function, running = bool },
 -- or nil and an error. stop() closes the listening port within a few seconds.
+-- The page only answers under a secret path (/<secret>/), printed in the hub log for the owner. Without it
+-- anyone on the LAN could open the page while it is open and overwrite the address and token or key (the
+-- driver would then talk to their device, or stop working). Wrong paths count; after MAX_WRONG it closes.
+local MAX_WRONG = 30
+local function make_secret()
+  local gettime = socket.gettime or os.clock
+  local abc = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+  local out = {}
+  for i = 1, 24 do
+    local a = gettime()
+    local x = 0
+    for j = 1, 200 + (i * 7) do x = (x * 31 + j) % 1000003 end
+    local us = math.floor(((gettime() - a) * 1e7 + a * 1e6) % 1e6)
+    local v = (math.random(0, 0x7fffffff) + us + x + #tostring({})) % #abc
+    out[i] = abc:sub(v + 1, v + 1)
+  end
+  return table.concat(out)
+end
+
+M._make_secret = make_secret
+
 function M.start(opts)
   local server, err = socket.tcp()
   if not server then return nil, err end
@@ -119,7 +140,8 @@ function M.start(opts)
   server:settimeout(2) -- wake up regularly so stop() takes effect
   local _, port = server:getsockname()
 
-  local srv = { port = port, running = true }
+  local srv = { port = port, running = true, wrong = 0 }
+  srv.path = "/" .. (opts.test_secret or make_secret()) .. "/"   -- test_secret: tests only
   local clients = 0
   function srv.stop() srv.running = false end
 
@@ -138,14 +160,18 @@ function M.start(opts)
             if not req then return end
             if not allowed(req) then
               respond(client, 400, page("Not allowed", '<p class="err">Open this page with the hub IP address.</p>'))
-            elseif req.method == "GET" and (req.path == "/" or req.path:match("^/%?")) then
+            elseif req.path:sub(1, #srv.path) ~= srv.path then
+              srv.wrong = srv.wrong + 1
+              if srv.wrong >= MAX_WRONG then srv.running = false end
+              respond(client, 404, page("Not found", ""))
+            elseif req.method == "GET" and (req.path == srv.path or req.path:sub(#srv.path + 1):match("^%?")) then
               respond(client, 200, form_page(opts.get_status()))
-            elseif req.method == "POST" and req.path == "/save" then
+            elseif req.method == "POST" and req.path == srv.path .. "save" then
               local form = parse_form(req.body)
               local host = (form.host or ""):gsub("%s", ""):gsub("^https?://", ""):gsub("/.*$", ""):gsub(":%d+$", "")
               local key = (form.key or ""):gsub("%s", "")
               if not valid_host(host) or not valid_key(key) then
-                respond(client, 400, page("Not saved", '<p class="err">Please enter a valid IP address and API key.</p><p><a href="/">Back</a></p>'))
+                respond(client, 400, page("Not saved", '<p class="err">Please enter a valid IP address and API key.</p><p><a href="./">Back</a></p>'))
               else
                 opts.on_save(host, key)
                 respond(client, 200, page("Saved", '<p class="ok">Saved. The driver is connecting to ' .. html_escape(host) ..
@@ -153,7 +179,7 @@ function M.start(opts)
                   '<p class="note">For your security this page closes itself shortly. Press Refresh on the UniFi Protect device to open it again for 15 minutes.</p>'))
               end
             else
-              respond(client, 404, page("Not found", '<p><a href="/">Settings</a></p>'))
+              respond(client, 404, page("Not found", ""))
             end
           end)
           if not okh then log.warn("[unifi] settings page error: " .. tostring(herr)) end

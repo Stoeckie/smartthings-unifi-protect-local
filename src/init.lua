@@ -668,7 +668,7 @@ local function open_settings_page(driver, ctrl)
       return
     end
     s.settings_srv = srv
-    s.settings_url = string.format("http://%s:%d/", hub_ip(driver), srv.port)
+    s.settings_url = string.format("http://%s:%d%s", hub_ip(driver), srv.port, srv.path or "/")
   end
   log.info("[unifi] settings page: " .. s.settings_url .. " (" .. how .. ")")
   schedule_settings_check(driver, ctrl)
@@ -828,7 +828,7 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.11)")
+log.info("[unifi] UniFi Protect Local driver starting (v2.12)")
 -- certificate pinning: which controller device owns an address
 require("certpin").lookup = function(host)
   for _, d in ipairs(driver:get_devices()) do

@@ -32,7 +32,7 @@ while (-not $url -and ((Get-Date) - $start).TotalSeconds -lt 90) {
   Start-Sleep -Seconds 2
   foreach ($line in @(Receive-Job $job)) {
     $line = "$line"
-    if ($line -match '\[unifi\].*?(http://[\d\.]+:\d+/)') { $url = $Matches[1] }
+    if ($line -match '\[unifi\].*?(http://[\d\.]+:\d+/[A-Za-z0-9]*/?)') { $url = $Matches[1] }
     elseif ($line -match 'rror|refused|timed out|ENOTFOUND|EHOSTUNREACH') { Write-Host $line -ForegroundColor Yellow }
   }
   if ($id -and -not $refreshed -and ((Get-Date) - $start).TotalSeconds -ge 8) {

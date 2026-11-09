@@ -132,6 +132,8 @@ The console uses a self-signed certificate, so it cannot be checked against a ce
 
 See [TERMS.md](TERMS.md).
 
+**Security (v2.12, build 2026-11-09b):** the settings page on the hub now only answers under a secret address (`http://<hub-ip>:<port>/<secret>/`, printed in the hub log and by `tools/find-settings-page.ps1`); before, anyone on your LAN could open it while it was open and overwrite the console address and API key. After 30 wrong addresses it closes. A pinned console certificate that cannot be read any more now stops the API key from being sent (before, pinning was skipped).
+
 ## License
 
 Apache License 2.0. Includes the `lustre` WebSocket library from the SmartThings Edge drivers repository (Apache 2.0), see NOTICE.
