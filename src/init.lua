@@ -497,6 +497,8 @@ local function set_children_offline(driver, ctrl)
   end
 end
 
+local STABLE_AFTER = 60 -- seconds an event stream must stay up before the reconnect backoff starts at 5 s again
+
 local function run(driver, ctrl, gen)
   local s = get_state(ctrl)
   local backoff = 5
@@ -517,6 +519,11 @@ local function run(driver, ctrl, gen)
       sync_cameras(driver, ctrl)
       ws, err = open_events_ws(p.host, p.key)
     end
+    -- a newer run() started while this one waited on the console: its socket must not be overwritten
+    if s.gen ~= gen then
+      if ws then pcall(function() ws:close(CloseCode.normal(), "superseded") end) end
+      return
+    end
 
     if not ws then
       log.error("[unifi] connection failed: " .. tostring(err))
@@ -527,7 +534,9 @@ local function run(driver, ctrl, gen)
     else
       s.ws = ws
       ctrl:online(); set_conn(ctrl, true)
-      backoff = 5
+      -- backoff is only reset when the stream stays up (see below): a console that accepts and then
+      -- drops the stream at once would otherwise be hammered every 5 s
+      local opened = os.time()
       log.info("[unifi] event stream open")
       while s.gen == gen do
         local ready, _, serr = socket.select({ ws }, nil, 60)
@@ -560,10 +569,14 @@ local function run(driver, ctrl, gen)
           sync_cameras(driver, ctrl)
         end
       end
-      if s.ws == ws then close_ws(s) end
+      -- always close this loop's own socket (start() may already have closed it; pcall covers that)
+      if s.ws == ws then s.ws = nil end
+      pcall(function() ws:close(CloseCode.normal(), "reconnect") end)
+      if os.time() - opened > STABLE_AFTER then backoff = 5 end
       if s.gen == gen then
         set_conn(ctrl, false, s.drop_reason or "event stream ended"); s.drop_reason = nil; ctrl:offline()
         socket.sleep(backoff)
+        backoff = math.min(backoff * 2, 300)
       end
     end
     ::continue::
@@ -585,6 +598,16 @@ end
 -- Lifecycle and capability handlers
 ---------------------------------------------------------------------------
 
+-- LED, button set-up and stream: safe to emit again at any time
+local function child_meta(child)
+  emit_led(child)
+  if child:supports_capability_by_id("button") then
+    child:emit_event(capabilities.button.supportedButtonValues({ "pushed" }, { visibility = { displayed = false } }))
+    child:emit_event(capabilities.button.numberOfButtons({ value = 1 }, { visibility = { displayed = false } }))
+  end
+  emit_stream(child)
+end
+
 local function child_init(driver, child)
   -- start every detection component in its idle state
   local ctrl = child:get_parent_device()
@@ -592,12 +615,7 @@ local function child_init(driver, child)
   for comp in pairs(child.profile.components) do
     if COMPONENT_KIND[comp] then emit_state(child, comp, false) end
   end
-  emit_led(child)
-  if child:supports_capability_by_id("button") then
-    child:emit_event(capabilities.button.supportedButtonValues({ "pushed" }, { visibility = { displayed = false } }))
-    child:emit_event(capabilities.button.numberOfButtons({ value = 1 }, { visibility = { displayed = false } }))
-  end
-  emit_stream(child)
+  child_meta(child)
 end
 
 local function hub_ip(driver)
@@ -700,8 +718,9 @@ end
 
 local function info_changed(driver, device, event, args)
   if is_child(device) then
-    -- profile changed (e.g. became doorbell or video toggled)
-    child_init(driver, device)
+    -- profile changed (e.g. became doorbell or video toggled). No child_init here: that would reset
+    -- detection to idle while a motion event is still running (its end then never shows a change)
+    child_meta(device)
     return
   end
   local old = (args and args.old_st_store and args.old_st_store.preferences) or {}
@@ -759,15 +778,22 @@ local function handle_led(driver, device, command)
   local ctrl = device:get_parent_device()
   if not ctrl then return end
   local p = prefs(ctrl)
+  -- optimistic: show the new value at once (the console can take seconds), put the real one back on error
+  local before = device:get_field("led_on")
+  device:set_field("led_on", on, { persist = true })
+  emit_led(device)
   local _, err = api.json_request(p.host, p.key, "PATCH", "/v1/cameras/" .. device.parent_assigned_child_key,
     { ledSettings = { isEnabled = on } })
   if err then
     log.warn("[unifi] could not switch LED of " .. device.label .. ": " .. tostring(err))
-    emit_led(device) -- show the real state again
-    return
+    device:set_field("led_on", before, { persist = true })
+    -- unknown before: the LED did not change, so it is most likely still the opposite of what was asked
+    local real = before
+    if type(real) ~= "boolean" then real = not on end
+    local comp = device.profile.components["led"]
+    -- forced: the app must drop the optimistic value it already shows
+    if comp then emitq.try(device, real and capabilities.switch.switch.on() or capabilities.switch.switch.off(), comp, true) end
   end
-  device:set_field("led_on", on, { persist = true })
-  emit_led(device)
 end
 
 local function handle_start_stream(driver, device)
@@ -828,7 +854,8 @@ local driver = Driver("unifi-protect-local", {
   capability_handlers = capability_handlers,
 })
 
-log.info("[unifi] UniFi Protect Local driver starting (v2.12)")
+local BUILD = "2026-11-09c"
+log.info("[unifi] UniFi Protect Local driver starting (v2.12, build " .. BUILD .. ")")
 -- certificate pinning: which controller device owns an address
 require("certpin").lookup = function(host)
   for _, d in ipairs(driver:get_devices()) do
